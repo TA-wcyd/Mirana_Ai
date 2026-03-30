@@ -50,9 +50,23 @@ app.use(passport.session());
 app.use("/auth", require("./routes/auth"));
 app.use("/api/user", require("./routes/user"));
 app.use("/api/chat", require("./routes/chat"));
+app.use("/api/memory", require("./routes/memory"));
+app.use("/api/mood", require("./routes/mood"));
+app.use("/api/dashboard", require("./routes/dashboard"));
+app.use("/api/upload", require("./routes/upload"));
 
 app.get("/", (req, res) => {
   res.json({ message: "Mirana API is alive 🔥", status: "Online" });
+});
+
+// One-time fix: patch user documents missing required fields
+app.get("/fix-users", async (req, res) => {
+  const User = require("./models/user");
+  const result = await User.updateMany(
+    { displayName: { $exists: false } },
+    { $set: { displayName: "User", onboardingComplete: false } }
+  );
+  res.json({ fixed: result.modifiedCount });
 });
 
 // ─── DB Connection & Server Start ────────────────────────────────────────────

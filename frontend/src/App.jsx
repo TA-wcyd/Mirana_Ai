@@ -3,6 +3,7 @@ import Login from "./pages/Login";
 import AuthCallback from "./pages/AuthCallback";
 import Onboarding from "./pages/Onboarding";
 import Chat from "./pages/Chat";
+import Dashboard from "./pages/Dashboard";
 
 export default function App() {
   return (
@@ -11,6 +12,7 @@ export default function App() {
         <Route path="/login"          element={<Login />} />
         <Route path="/auth/callback"  element={<AuthCallback />} />
         <Route path="/onboarding"     element={<Onboarding />} />
+        <Route path="/dashboard"      element={<Dashboard />} />
         <Route path="/chat"           element={<Chat />} />
         <Route path="*"               element={<Navigate to="/login" replace />} />
       </Routes>

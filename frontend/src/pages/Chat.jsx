@@ -1,29 +1,40 @@
 import { useState, useEffect, useRef } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import MiranaOrb from "../components/MiranaOrb";
 import { useVoice } from "../hooks/useVoice";
 import {
   getMe, getChats, createChat, getChat,
-  sendMessage, deleteChat, logout,
+  sendMessage, deleteChat, logout, uploadFile
 } from "../services/api";
 
 export default function Chat() {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [user, setUser] = useState(null);
   const [chats, setChats] = useState([]);
-  const [activeChatId, setActiveChatId] = useState(null);
+  const [activeChatId, setActiveChatId] = useState(searchParams.get("session") || null);
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [activeTitle, setActiveTitle] = useState("NEW SESSION");
   const [error, setError] = useState("");
+  const [mode, setMode] = useState(searchParams.get("mode") || "default");
+
+  // Update URL internally if mode/session changes
+  useEffect(() => {
+    const newParams = new URLSearchParams();
+    if (mode !== "default") newParams.set("mode", mode);
+    if (activeChatId) newParams.set("session", activeChatId);
+    setSearchParams(newParams, { replace: true });
+  }, [mode, activeChatId, setSearchParams]);
 
   // Refs so handleSend always sees latest values — no stale closure
   const activeChatIdRef = useRef(null);
   const loadingRef = useRef(false);
   const bottomRef = useRef(null);
   const textareaRef = useRef(null);
+  const fileInputRef = useRef(null);
 
   const {
     speak, stopSpeaking, isSpeaking,
@@ -118,7 +129,7 @@ export default function Chat() {
     if (overrideText === undefined) setInput("");
 
     try {
-      const data = await sendMessage(chatId, msg);
+      const data = await sendMessage(chatId, msg, mode);
       setMessages((prev) => [...prev, { role: "assistant", content: data.reply }]);
       if (data.title) {
         setActiveTitle(data.title.toUpperCase());
@@ -140,6 +151,49 @@ export default function Chat() {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       handleSend();
+    }
+  };
+
+  const handleFileUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file || loadingRef.current) return;
+
+    let chatId = activeChatIdRef.current;
+    if (!chatId) {
+      try {
+        const data = await createChat();
+        chatId = data.chatId;
+        setActiveChatId(chatId);
+        activeChatIdRef.current = chatId;
+        await loadChats();
+      } catch (err) {
+        setError("Failed to start session before upload.");
+        return;
+      }
+    }
+
+    e.target.value = ""; // Reset
+    setLoading(true);
+    loadingRef.current = true;
+    const userPrompt = input.trim();
+    if (userPrompt) setInput(""); // Clear input
+
+    setMessages((prev) => [...prev, { role: "user", content: `📎 [Uploaded: ${file.name}] ${userPrompt}` }]);
+
+    try {
+      const data = await uploadFile(chatId, file, userPrompt);
+      setMessages((prev) => [...prev, { role: "assistant", content: data.reply }]);
+      if (!activeTitle || activeTitle === "NEW SESSION") {
+        setActiveTitle(file.name.toUpperCase());
+        loadChats();
+      }
+      speak(data.reply);
+    } catch (err) {
+      setMessages((prev) => [...prev, { role: "assistant", content: "Failed to process the file, boss." }]);
+      setError(err.message || "Upload failed");
+    } finally {
+      setLoading(false);
+      loadingRef.current = false;
     }
   };
 
@@ -234,6 +288,19 @@ export default function Chat() {
             <span style={s.sessionLabel}>SESSION</span>
             <span style={s.sessionName}>{activeTitle}</span>
           </div>
+          
+          <select 
+            value={mode} 
+            onChange={(e) => setMode(e.target.value)} 
+            style={s.modeSelect}
+          >
+            <option value="default">Standard Protocol</option>
+            <option value="study">Study Buddy</option>
+            <option value="coach">Full Coach</option>
+            <option value="debate">Debate Partner</option>
+            <option value="latenight">Late Night</option>
+          </select>
+
           <div style={s.badges}>
             {(user?.personality?.traits || []).slice(0, 3).map((t) => (
               <span key={t} style={s.badge}>{t}</span>
@@ -341,6 +408,20 @@ export default function Chat() {
               rows={1}
               disabled={isListening}
             />
+            <input 
+              type="file" 
+              ref={fileInputRef} 
+              style={{display: "none"}} 
+              onChange={handleFileUpload} 
+              accept="image/*,.pdf,.txt" 
+            />
+            <button
+              style={{ ...s.iconBtn, color: "#00d4ff", border: "1px solid rgba(0,212,255,0.15)" }}
+              onClick={() => fileInputRef.current?.click()}
+              title="Attach Document/Image"
+            >
+              📎
+            </button>
             <button
               style={{
                 ...s.iconBtn,
@@ -410,6 +491,7 @@ const s = {
   topBar: { display:"flex", alignItems:"center", gap:12, padding:"14px 20px", borderBottom:`1px solid ${BORDER}`, flexShrink:0, background:"rgba(3,8,20,0.6)", backdropFilter:"blur(10px)" },
   toggleBtn: { background:"none", border:"none", color:MUTED, fontSize:18, cursor:"pointer", padding:"4px 6px" },
   topBarTitle: { display:"flex", flexDirection:"column", flex:1, overflow:"hidden" },
+  modeSelect: { background: "rgba(0,212,255,0.06)", border: "1px solid rgba(0,212,255,0.2)", borderRadius: 6, color: "#00d4ff", padding: "4px 8px", fontSize: 11, fontFamily: "'Orbitron', monospace", outline: "none", cursor: "pointer", marginRight: 16 },
   sessionLabel: { color:CYAN, fontSize:9, fontFamily:"'Orbitron', monospace", letterSpacing:3, opacity:0.5 },
   sessionName: { color:TEXT, fontSize:13, fontWeight:600, fontFamily:"'Orbitron', monospace", letterSpacing:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" },
   badges: { display:"flex", gap:6, flexShrink:0 },
