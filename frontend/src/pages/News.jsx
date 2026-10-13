@@ -3,12 +3,24 @@ import { useNavigate, Link } from "react-router-dom";
 import MiranaOrb from "../components/MiranaOrb";
 import { getMe, getNews, logout } from "../services/api";
 
+function useIsMobile(bp = 768) {
+  const [v, setV] = useState(() => window.innerWidth <= bp);
+  useEffect(() => {
+    const h = () => setV(window.innerWidth <= bp);
+    window.addEventListener("resize", h);
+    return () => window.removeEventListener("resize", h);
+  }, [bp]);
+  return v;
+}
+
 export default function News() {
   const navigate = useNavigate();
+  const isMobile = useIsMobile();
   const [user, setUser] = useState(null);
   const [articles, setArticles] = useState([]);
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   useEffect(() => {
     getMe()
@@ -55,50 +67,91 @@ export default function News() {
   return (
     <div style={s.page}>
       <div style={s.grid} />
-      
-      {/* Sidebar (mini version) */}
-      <div style={s.sidebar}>
-        <div style={s.sidebarInner}>
-          <div style={s.logoArea}>
-            <MiranaOrb size={28} />
-            <span style={s.logoText}>MIRANA</span>
-          </div>
-          
-          <div style={s.navGroup}>
-            <Link to="/dashboard" style={s.navItem}>DASHBOARD</Link>
-            <Link to="/chat" style={s.navItem}>AI TERMINAL</Link>
-            <div style={s.navItemActive}>GLOBAL FEED</div>
-          </div>
 
-          <div style={s.spacer} />
+      {/* Mobile sidebar overlay */}
+      {isMobile && sidebarOpen && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 99, backdropFilter: "blur(2px)" }}
+          onClick={() => setSidebarOpen(false)} />
+      )}
 
-          {user && (
-            <div style={s.userFooter}>
-              {user.photo && <img src={user.photo} style={s.avatar} referrerPolicy="no-referrer" alt="" />}
-              <div style={s.userInfo}>
-                <span style={s.userName}>{user.displayName}</span>
-                <span style={s.userRole}>AUTHORIZED</span>
-              </div>
-              <button style={s.logoutBtn} onClick={handleLogout}>⏻</button>
+      {/* Sidebar */}
+      {isMobile ? (
+        <div style={{
+          ...s.sidebar,
+          position: "fixed",
+          top: 0, bottom: 0, left: sidebarOpen ? 0 : "-100%",
+          zIndex: 100,
+          transition: "left 0.3s ease",
+        }}>
+          <div style={s.sidebarInner}>
+            <div style={s.logoArea}>
+              <button style={{ background: "none", border: "none", color: "#4a6080", fontSize: 18, cursor: "pointer" }} onClick={() => setSidebarOpen(false)}>✕</button>
+              <MiranaOrb size={28} />
+              <span style={s.logoText}>MIRANA</span>
             </div>
-          )}
+            <div style={s.navGroup}>
+              <Link to="/dashboard" style={s.navItem} onClick={() => setSidebarOpen(false)}>DASHBOARD</Link>
+              <Link to="/chat" style={s.navItem} onClick={() => setSidebarOpen(false)}>AI TERMINAL</Link>
+              <div style={s.navItemActive}>GLOBAL FEED</div>
+            </div>
+            <div style={s.spacer} />
+            {user && (
+              <div style={s.userFooter}>
+                {user.photo && <img src={user.photo} style={s.avatar} referrerPolicy="no-referrer" alt="" />}
+                <div style={s.userInfo}>
+                  <span style={s.userName}>{user.displayName}</span>
+                  <span style={s.userRole}>AUTHORIZED</span>
+                </div>
+                <button style={s.logoutBtn} onClick={handleLogout}>⏻</button>
+              </div>
+            )}
+          </div>
         </div>
-      </div>
+      ) : (
+        <div style={s.sidebar}>
+          <div style={s.sidebarInner}>
+            <div style={s.logoArea}>
+              <MiranaOrb size={28} />
+              <span style={s.logoText}>MIRANA</span>
+            </div>
+            <div style={s.navGroup}>
+              <Link to="/dashboard" style={s.navItem}>DASHBOARD</Link>
+              <Link to="/chat" style={s.navItem}>AI TERMINAL</Link>
+              <div style={s.navItemActive}>GLOBAL FEED</div>
+            </div>
+            <div style={s.spacer} />
+            {user && (
+              <div style={s.userFooter}>
+                {user.photo && <img src={user.photo} style={s.avatar} referrerPolicy="no-referrer" alt="" />}
+                <div style={s.userInfo}>
+                  <span style={s.userName}>{user.displayName}</span>
+                  <span style={s.userRole}>AUTHORIZED</span>
+                </div>
+                <button style={s.logoutBtn} onClick={handleLogout}>⏻</button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Main Content */}
-      <div style={s.main}>
+      <div style={{ ...s.main, padding: isMobile ? "20px 16px" : "40px" }}>
         <div style={s.header}>
-          <h1 style={s.greeting}>Global Network Feed</h1>
+          {isMobile && (
+            <button style={{ background: "none", border: "none", color: "#00d4ff", fontSize: 22, cursor: "pointer", marginBottom: 12 }}
+              onClick={() => setSidebarOpen(true)}>☰</button>
+          )}
+          <h1 style={{ ...s.greeting, fontSize: isMobile ? 22 : 32 }}>Global Network Feed</h1>
           <p style={s.greetingSub}>
-            Latest intelligence and headlines based on your region or topic. 
+            Latest intelligence and headlines based on your region or topic.
             Currently tracking: <span style={{color: "#fff"}}>{query.toUpperCase()}</span>
           </p>
         </div>
 
-        <div style={s.searchBar}>
-           <input 
-             type="text" 
-             placeholder="Search global topics (e.g. Madrid, AI, Stocks)..." 
+        <div style={{ ...s.searchBar, flexDirection: isMobile ? "column" : "row" }}>
+           <input
+             type="text"
+             placeholder="Search global topics (e.g. Madrid, AI, Stocks)..."
              style={s.searchInput}
              value={query === "Top Headlines" ? "" : query}
              onChange={(e) => setQuery(e.target.value)}
@@ -106,7 +159,7 @@ export default function News() {
                if (e.key === "Enter") loadNews(e.target.value);
              }}
            />
-           <button style={s.searchBtn} onClick={() => loadNews(query)}>SEARCH</button>
+           <button style={{ ...s.searchBtn, height: isMobile ? 48 : "auto" }} onClick={() => loadNews(query)}>SEARCH</button>
         </div>
 
         {loading ? (
@@ -117,21 +170,20 @@ export default function News() {
         ) : articles.length === 0 ? (
            <p style={s.emptyText}>No intelligence reports found for "{query}". Try a broader topic.</p>
         ) : (
-          <div style={s.newsGrid}>
+          <div style={{ ...s.newsGrid, gridTemplateColumns: isMobile ? "1fr" : "repeat(auto-fill, minmax(320px, 1fr))" }}>
             {articles.map((article, idx) => (
               <a key={idx} href={article.link} target="_blank" rel="noreferrer" style={s.newsCard}>
                 <div style={s.articleMeta}>
                   <span style={s.sourceBadge}>{article.source}</span>
                   <span style={s.dateText}>{new Date(article.pubDate).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
                 </div>
-                
+
                 {/* 100% Automated Real-Time Thumbnail System */}
-                <img 
-                  src={article.thumbnail || `https://api.microlink.io/?url=${encodeURIComponent(article.link)}&embed=image.url&screenshot=true&meta=false`} 
-                  alt="" 
-                  style={s.articleImage} 
+                <img
+                  src={article.thumbnail || `https://api.microlink.io/?url=${encodeURIComponent(article.link)}&embed=image.url&screenshot=true&meta=false`}
+                  alt=""
+                  style={s.articleImage}
                   onError={(e) => {
-                    // Final fallback if even Microlink fails (e.g. invalid URL)
                     e.target.src = "https://images.unsplash.com/photo-1504711434969-e33886168f5c?q=80&w=1000&auto=format&fit=crop";
                   }}
                 />

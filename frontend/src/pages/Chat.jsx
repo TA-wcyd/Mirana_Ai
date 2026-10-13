@@ -8,12 +8,23 @@ import {
   getActiveWishes,
 } from "../services/api";
 
+function useIsMobile(bp = 768) {
+  const [v, setV] = useState(() => window.innerWidth <= bp);
+  useEffect(() => {
+    const h = () => setV(window.innerWidth <= bp);
+    window.addEventListener("resize", h);
+    return () => window.removeEventListener("resize", h);
+  }, [bp]);
+  return v;
+}
+
 const BASE = (import.meta.env.VITE_API_URL !== undefined && import.meta.env.VITE_API_URL !== "")
   ? import.meta.env.VITE_API_URL
   : (import.meta.env.PROD ? "" : "http://localhost:5000");
 
 export default function Chat() {
   const navigate = useNavigate();
+  const isMobile = useIsMobile();
   const [searchParams, setSearchParams] = useSearchParams();
   const [user, setUser] = useState(null);
   const [chats, setChats] = useState([]);
@@ -333,8 +344,25 @@ export default function Chat() {
     <div style={s.root}>
       <div style={s.grid} />
 
+      {/* Mobile overlay backdrop */}
+      {isMobile && sidebarOpen && (
+        <div
+          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 99, backdropFilter: "blur(2px)" }}
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
+
       {/* Sidebar */}
-      <div style={{ ...s.sidebar, width: sidebarOpen ? 270 : 0 }}>
+      <div style={{
+        ...s.sidebar,
+        width: sidebarOpen ? 270 : 0,
+        ...(isMobile && {
+          position: "fixed",
+          top: 0, bottom: 0, left: 0,
+          width: sidebarOpen ? 280 : 0,
+          zIndex: 100,
+        }),
+      }}>
         <div style={s.sidebarInner}>
           <div style={s.sidebarLogo}>
             <MiranaOrb size={36} isSpeaking={isSpeaking} isListening={isListening} />
@@ -424,7 +452,7 @@ export default function Chat() {
       <div style={s.main}>
         <div style={s.topBar}>
           <button style={s.toggleBtn} onClick={() => setSidebarOpen((p) => !p)}>☰</button>
-          <div style={s.topBarTitle}>
+          <div style={{ ...s.topBarTitle, flex: 1, minWidth: 0 }}>
             <span style={s.sessionLabel}>SESSION</span>
             <span style={s.sessionName}>{activeTitle}</span>
           </div>
@@ -434,19 +462,21 @@ export default function Chat() {
             onChange={(e) => setMode(e.target.value)}
             style={s.modeSelect}
           >
-            <option value="default">⚡ Standard</option>
-            <option value="jarvis">🤖 Jarvis Mode</option>
-            <option value="study">🧠 Study Buddy</option>
-            <option value="coach">💪 Full Coach</option>
-            <option value="debate">⚔️ Debate Partner</option>
-            <option value="latenight">🌙 Late Night</option>
+            <option value="default">{isMobile ? "⚡" : "⚡ Standard"}</option>
+            <option value="jarvis">{isMobile ? "🤖" : "🤖 Jarvis Mode"}</option>
+            <option value="study">{isMobile ? "🧠" : "🧠 Study Buddy"}</option>
+            <option value="coach">{isMobile ? "💪" : "💪 Full Coach"}</option>
+            <option value="debate">{isMobile ? "⚔️" : "⚔️ Debate Partner"}</option>
+            <option value="latenight">{isMobile ? "🌙" : "🌙 Late Night"}</option>
           </select>
 
-          <div style={s.badges}>
-            {(user?.personality?.traits || []).slice(0, 2).map((t) => (
-              <span key={t} style={s.badge}>{t}</span>
-            ))}
-          </div>
+          {!isMobile && (
+            <div style={s.badges}>
+              {(user?.personality?.traits || []).slice(0, 2).map((t) => (
+                <span key={t} style={s.badge}>{t}</span>
+              ))}
+            </div>
+          )}
           <button
             style={{ ...s.voiceCtrlBtn, color: muted ? "#4a6080" : "#00d4ff" }}
             onClick={toggleMute}
@@ -506,9 +536,9 @@ export default function Chat() {
           )}
 
           {messages.map((m, i) => (
-            <div key={i} style={{ ...s.msgRow, justifyContent: m.role === "user" ? "flex-end" : "flex-start" }}>
+            <div key={i} style={{ ...s.msgRow, justifyContent: m.role === "user" ? "flex-end" : "flex-start", maxWidth: isMobile ? "92%" : "78%" }}>
               {m.role === "assistant" && <div style={s.miranaAvatar}>M</div>}
-              <div style={{ ...s.bubble, ...(m.role === "user" ? s.userBubble : s.miranaBubble) }}>
+              <div style={{ ...s.bubble, ...(m.role === "user" ? s.userBubble : s.miranaBubble), fontSize: isMobile ? 13 : 14 }}>
                 {m.content}
               </div>
               {m.role === "user" && user?.photo && (
@@ -542,7 +572,7 @@ export default function Chat() {
           <div ref={bottomRef} />
         </div>
 
-        <div style={s.inputBar}>
+        <div style={{ ...s.inputBar, padding: isMobile ? "10px 12px 14px" : "12px 20px 16px" }}>
           {error && <div style={s.errorBanner}>⚠ {error}</div>}
           <div style={s.statusRow}>
             <span style={{

@@ -92,6 +92,10 @@ export default function Login() {
         @keyframes loginSpin { to { transform: rotate(360deg); } }
         @keyframes loginPulse { from { opacity: 0.7; transform: scale(0.95); } to { opacity: 1; transform: scale(1.05); } }
         @keyframes loginGlow { from { opacity: 0.4; } to { opacity: 0.9; } }
+        @media (max-width: 480px) {
+          #mirana-login-panel { padding: 28px 20px !important; }
+          #mirana-login-title { font-size: 24px !important; letter-spacing: 4px !important; }
+        }
       `}</style>
     </div>
   );
@@ -146,7 +150,7 @@ const s = {
     borderRadius: 16,
     padding: "44px 48px",
     maxWidth: 420,
-    width: "90%",
+    width: "92%",
     display: "flex",
     flexDirection: "column",
     alignItems: "center",

@@ -98,6 +98,9 @@ export function useVoice() {
     setIsSpeaking(false);
   }, [muted]);
 
+  const silenceTimerRef = useRef(null);
+  const accumulatedTranscriptRef = useRef("");
+
   const startListening = useCallback((onResult, onError) => {
     const SpeechRecognition =
       window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -110,20 +113,53 @@ export function useVoice() {
     window.speechSynthesis?.cancel();
     setIsSpeaking(false);
 
+    // Reset accumulated transcript
+    accumulatedTranscriptRef.current = "";
+
     const recognition = new SpeechRecognition();
-    recognition.continuous = false;
-    recognition.interimResults = false;
+    // continuous + interimResults lets us keep listening across natural pauses
+    recognition.continuous = true;
+    recognition.interimResults = true;
     recognition.lang = "en-US";
 
     recognition.onstart = () => setIsListening(true);
-    recognition.onend = () => setIsListening(false);
-    recognition.onerror = (e) => {
-      setIsListening(false);
-      onError?.(e.error);
-    };
+
     recognition.onresult = (e) => {
-      const transcript = e.results[0][0].transcript;
-      onResult(transcript);
+      // Build the full transcript from all final results so far
+      let finalText = "";
+      let hasNewFinal = false;
+      for (let i = 0; i < e.results.length; i++) {
+        if (e.results[i].isFinal) {
+          finalText += e.results[i][0].transcript + " ";
+          hasNewFinal = true;
+        }
+      }
+
+      if (hasNewFinal) {
+        accumulatedTranscriptRef.current = finalText.trim();
+      }
+
+      // Reset the 3-second silence timer every time speech is detected
+      if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+      silenceTimerRef.current = setTimeout(() => {
+        const transcript = accumulatedTranscriptRef.current;
+        recognition.stop();
+        setIsListening(false);
+        if (transcript) onResult(transcript);
+      }, 3000);
+    };
+
+    recognition.onerror = (e) => {
+      if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+      setIsListening(false);
+      // Ignore "no-speech" — user just didn't say anything
+      if (e.error !== "no-speech") onError?.(e.error);
+    };
+
+    recognition.onend = () => {
+      // onend fires when stop() is called — clean up
+      if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+      setIsListening(false);
     };
 
     recognitionRef.current = recognition;
@@ -131,6 +167,7 @@ export function useVoice() {
   }, []);
 
   const stopListening = useCallback(() => {
+    if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
     recognitionRef.current?.stop();
     setIsListening(false);
   }, []);

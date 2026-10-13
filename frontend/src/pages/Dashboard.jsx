@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import MiranaOrb from "../components/MiranaOrb";
 import {
@@ -7,6 +7,16 @@ import {
   markNotificationRead, markAllNotificationsRead, deleteNotification,
   deleteMemory,
 } from "../services/api";
+
+function useIsMobile(breakpoint = 768) {
+  const [isMobile, setIsMobile] = useState(() => window.innerWidth <= breakpoint);
+  useEffect(() => {
+    const handler = () => setIsMobile(window.innerWidth <= breakpoint);
+    window.addEventListener("resize", handler);
+    return () => window.removeEventListener("resize", handler);
+  }, [breakpoint]);
+  return isMobile;
+}
 
 const PRIORITY_COLOR = { high: "#ef4444", medium: "#f59e0b", low: "#10b981" };
 const CATEGORY_ICON = {
@@ -20,10 +30,12 @@ const MOOD_COLORS = {
 
 export default function Dashboard() {
   const navigate = useNavigate();
+  const isMobile = useIsMobile();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState("overview");
   const [notifOpen, setNotifOpen] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [showWishForm, setShowWishForm] = useState(false);
   const [wishForm, setWishForm] = useState({ title: "", description: "", category: "personal", priority: "medium", deadline: "" });
   const [wishFormLoading, setWishFormLoading] = useState(false);
@@ -31,6 +43,9 @@ export default function Dashboard() {
   const [localNotifications, setLocalNotifications] = useState([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [memories, setMemories] = useState([]);
+
+  // Close sidebar on desktop resize
+  useEffect(() => { if (!isMobile) setSidebarOpen(false); }, [isMobile]);
 
   const load = () => {
     getDashboard()
@@ -117,65 +132,95 @@ export default function Dashboard() {
   const maxCount = Math.max(...trendData.map((d) => d.count), 1);
   const activeWishCount = localWishes.filter((w) => w.status === "active").length;
 
+  const SidebarContent = () => (
+    <div style={s.sidebarInner}>
+      <div style={s.logoArea}>
+        {isMobile && (
+          <button style={s.closeSidebarBtn} onClick={() => setSidebarOpen(false)}>✕</button>
+        )}
+        <MiranaOrb size={28} />
+        <span style={s.logoText}>MIRANA</span>
+      </div>
+
+      <div style={s.navGroup}>
+        <div style={s.navItemActive}>DASHBOARD</div>
+        <Link to="/chat" style={s.navItem} onClick={() => setSidebarOpen(false)}>AI TERMINAL</Link>
+        <Link to="/news" style={s.navItem} onClick={() => setSidebarOpen(false)}>GLOBAL FEED</Link>
+      </div>
+
+      {/* Tab navigation */}
+      <div style={{ marginTop: 24, display: "flex", flexDirection: "column", gap: 4 }}>
+        {[
+          { key: "overview", label: "OVERVIEW", icon: "◈" },
+          { key: "wishes", label: "MY GOALS", icon: "⭐" },
+          { key: "memory", label: "MEMORY BANK", icon: "🧠" },
+          { key: "mood", label: "EMOTIONAL LOG", icon: "📊" },
+        ].map((tab) => (
+          <button key={tab.key} style={{
+            ...s.tabBtn,
+            background: activeTab === tab.key ? "rgba(0,212,255,0.1)" : "transparent",
+            color: activeTab === tab.key ? "#00d4ff" : "#4a6080",
+            borderColor: activeTab === tab.key ? "rgba(0,212,255,0.2)" : "transparent",
+          }} onClick={() => { setActiveTab(tab.key); setSidebarOpen(false); }}>
+            <span style={{ marginRight: 8 }}>{tab.icon}</span>{tab.label}
+          </button>
+        ))}
+      </div>
+
+      <div style={s.spacer} />
+
+      <div style={s.userFooter}>
+        {data.photo && <img src={data.photo} style={s.avatar} referrerPolicy="no-referrer" alt="" />}
+        <div style={s.userInfo}>
+          <span style={s.userName}>{data.firstName}</span>
+          <span style={s.userRole}>AUTHORIZED</span>
+        </div>
+        <button style={s.logoutBtn} onClick={handleLogout}>⏻</button>
+      </div>
+    </div>
+  );
+
   return (
     <div style={s.page}>
       <div style={s.grid} />
 
+      {/* Mobile sidebar overlay */}
+      {isMobile && sidebarOpen && (
+        <div style={s.mobileOverlay} onClick={() => setSidebarOpen(false)} />
+      )}
+
       {/* Sidebar */}
-      <div style={s.sidebar}>
-        <div style={s.sidebarInner}>
-          <div style={s.logoArea}>
-            <MiranaOrb size={28} />
-            <span style={s.logoText}>MIRANA</span>
-          </div>
-
-          <div style={s.navGroup}>
-            <div style={s.navItemActive}>DASHBOARD</div>
-            <Link to="/chat" style={s.navItem}>AI TERMINAL</Link>
-            <Link to="/news" style={s.navItem}>GLOBAL FEED</Link>
-          </div>
-
-          {/* Tab navigation */}
-          <div style={{ marginTop: 24, display: "flex", flexDirection: "column", gap: 4 }}>
-            {[
-              { key: "overview", label: "OVERVIEW", icon: "◈" },
-              { key: "wishes", label: "MY GOALS", icon: "⭐" },
-              { key: "memory", label: "MEMORY BANK", icon: "🧠" },
-              { key: "mood", label: "EMOTIONAL LOG", icon: "📊" },
-            ].map((tab) => (
-              <button key={tab.key} style={{
-                ...s.tabBtn,
-                background: activeTab === tab.key ? "rgba(0,212,255,0.1)" : "transparent",
-                color: activeTab === tab.key ? "#00d4ff" : "#4a6080",
-                borderColor: activeTab === tab.key ? "rgba(0,212,255,0.2)" : "transparent",
-              }} onClick={() => setActiveTab(tab.key)}>
-                <span style={{ marginRight: 8 }}>{tab.icon}</span>{tab.label}
-              </button>
-            ))}
-          </div>
-
-          <div style={s.spacer} />
-
-          <div style={s.userFooter}>
-            {data.photo && <img src={data.photo} style={s.avatar} referrerPolicy="no-referrer" alt="" />}
-            <div style={s.userInfo}>
-              <span style={s.userName}>{data.firstName}</span>
-              <span style={s.userRole}>AUTHORIZED</span>
-            </div>
-            <button style={s.logoutBtn} onClick={handleLogout}>⏻</button>
-          </div>
+      {isMobile ? (
+        <div style={{
+          ...s.sidebar,
+          position: "fixed",
+          left: sidebarOpen ? 0 : "-100%",
+          top: 0, bottom: 0, zIndex: 200,
+          transition: "left 0.3s ease",
+        }}>
+          <SidebarContent />
         </div>
-      </div>
+      ) : (
+        <div style={s.sidebar}>
+          <SidebarContent />
+        </div>
+      )}
 
       {/* Main */}
       <div style={s.main}>
         {/* Top bar */}
         <div style={s.topBar}>
-          <div style={{ flex: 1 }}>
-            <h1 style={s.greeting}>{data.greeting}</h1>
-            <p style={s.greetingSub}>
-              {data.memoryStats?.total || 0} memories · {activeWishCount} active goals · Intelligence systems online
-            </p>
+          {/* Hamburger on mobile */}
+          {isMobile && (
+            <button style={s.hamburgerBtn} onClick={() => setSidebarOpen(true)}>☰</button>
+          )}
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <h1 style={{ ...s.greeting, fontSize: isMobile ? 15 : 22 }}>{data.greeting}</h1>
+            {!isMobile && (
+              <p style={s.greetingSub}>
+                {data.memoryStats?.total || 0} memories · {activeWishCount} active goals · Intelligence systems online
+              </p>
+            )}
           </div>
 
           {/* Notification Bell */}
@@ -188,7 +233,7 @@ export default function Dashboard() {
             </button>
 
             {notifOpen && (
-              <div style={s.notifDropdown}>
+              <div style={{ ...s.notifDropdown, width: isMobile ? "calc(100vw - 32px)" : 360, right: isMobile ? -8 : 0 }}>
                 <div style={s.notifHeader}>
                   <span style={s.notifTitle}>INTEL FEED</span>
                   {unreadCount > 0 && (
@@ -218,19 +263,21 @@ export default function Dashboard() {
             )}
           </div>
 
-          <button style={s.chatBtn} onClick={() => navigate("/chat?mode=jarvis")}>
-            🤖 JARVIS MODE
-          </button>
+          {!isMobile && (
+            <button style={s.chatBtn} onClick={() => navigate("/chat?mode=jarvis")}>
+              🤖 JARVIS MODE
+            </button>
+          )}
         </div>
 
         {/* Scrollable content */}
-        <div style={s.content}>
+        <div style={{ ...s.content, paddingBottom: isMobile ? 80 : 28 }}>
 
           {/* ── OVERVIEW TAB ─────────────────────────────────────────────── */}
           {activeTab === "overview" && (
-            <div style={s.dashboardGrid}>
+            <div style={{ ...s.dashboardGrid, gridTemplateColumns: isMobile ? "1fr" : "repeat(auto-fit, minmax(380px, 1fr))" }}>
               {/* Quick Protocols */}
-              <div style={{ ...s.card, gridColumn: "1 / -1", background: "rgba(0,5,15,0.5)" }}>
+              <div style={{ ...s.card, gridColumn: isMobile ? "1" : "1 / -1", background: "rgba(0,5,15,0.5)" }}>
                 <h2 style={s.cardTitle}>Quick Protocols</h2>
                 <div style={s.quickActions}>
                   {[
@@ -338,7 +385,7 @@ export default function Dashboard() {
               </div>
 
               {/* Recent Sessions */}
-              <div style={{ ...s.card, gridColumn: "1 / -1" }}>
+              <div style={{ ...s.card, gridColumn: isMobile ? "1" : "1 / -1" }}>
                 <h2 style={s.cardTitle}>Recent Sessions</h2>
                 {data.recentChats?.length === 0 ? (
                   <p style={s.emptyText}>No chat history found.</p>
@@ -572,6 +619,31 @@ export default function Dashboard() {
         </div>
       </div>
 
+      {/* Mobile Bottom Nav */}
+      {isMobile && (
+        <div style={s.mobileBottomNav}>
+          {[
+            { key: "overview", icon: "◈", label: "HOME" },
+            { key: "wishes", icon: "⭐", label: "GOALS" },
+            { key: "memory", icon: "🧠", label: "MEMORY" },
+            { key: "mood", icon: "📊", label: "MOOD" },
+          ].map((tab) => (
+            <button key={tab.key} style={{
+              ...s.mobileNavBtn,
+              color: activeTab === tab.key ? "#00d4ff" : "#4a6080",
+              borderTop: activeTab === tab.key ? "2px solid #00d4ff" : "2px solid transparent",
+            }} onClick={() => setActiveTab(tab.key)}>
+              <span style={{ fontSize: 18 }}>{tab.icon}</span>
+              <span style={{ fontSize: 8, fontFamily: "'Orbitron', monospace", letterSpacing: 1 }}>{tab.label}</span>
+            </button>
+          ))}
+          <button style={{ ...s.mobileNavBtn, color: "#4a6080" }} onClick={() => navigate("/chat?mode=jarvis")}>
+            <span style={{ fontSize: 18 }}>🤖</span>
+            <span style={{ fontSize: 8, fontFamily: "'Orbitron', monospace", letterSpacing: 1 }}>JARVIS</span>
+          </button>
+        </div>
+      )}
+
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Exo+2:wght@300;400;500;600&display=swap');
         * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -588,10 +660,12 @@ const s = {
   page: { display: "flex", height: "100vh", background: "#030712", fontFamily: "'Exo 2', sans-serif", color: "#e2e8f0", overflow: "hidden", position: "relative" },
   grid: { position: "absolute", inset: 0, backgroundImage: `linear-gradient(rgba(0,212,255,0.025) 1px, transparent 1px),linear-gradient(90deg, rgba(0,212,255,0.025) 1px, transparent 1px)`, backgroundSize: "40px 40px", pointerEvents: "none", zIndex: 0 },
   loadingText: { marginTop: 20, color: "#00d4ff", fontFamily: "'Orbitron', monospace", letterSpacing: 3, fontSize: 12 },
-  sidebar: { width: 230, background: "rgba(3,8,20,0.95)", borderRight: "1px solid rgba(0,212,255,0.1)", zIndex: 10, display: "flex", flexDirection: "column", flexShrink: 0 },
+  mobileOverlay: { position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 199, backdropFilter: "blur(2px)" },
+  sidebar: { width: 230, background: "rgba(3,8,20,0.97)", borderRight: "1px solid rgba(0,212,255,0.1)", zIndex: 10, display: "flex", flexDirection: "column", flexShrink: 0 },
   sidebarInner: { display: "flex", flexDirection: "column", height: "100%", padding: "20px 14px" },
   logoArea: { display: "flex", alignItems: "center", gap: 10, marginBottom: 30, padding: "0 8px" },
   logoText: { fontFamily: "'Orbitron', monospace", fontWeight: 900, fontSize: 16, letterSpacing: 4, color: "#00d4ff" },
+  closeSidebarBtn: { background: "none", border: "none", color: "#4a6080", fontSize: 18, cursor: "pointer", marginRight: 4, padding: 4 },
   navGroup: { display: "flex", flexDirection: "column", gap: 4 },
   navItemActive: { background: "rgba(0,212,255,0.1)", border: "1px solid rgba(0,212,255,0.2)", borderRadius: 8, padding: "10px 14px", color: "#00d4ff", fontSize: 11, fontWeight: 600, fontFamily: "'Orbitron', monospace", letterSpacing: 1 },
   navItem: { padding: "10px 14px", color: "#4a6080", fontSize: 11, fontWeight: 500, fontFamily: "'Orbitron', monospace", letterSpacing: 1, textDecoration: "none" },
@@ -603,12 +677,13 @@ const s = {
   userName: { display: "block", color: "#e2e8f0", fontSize: 12, fontWeight: 600, textOverflow: "ellipsis", overflow: "hidden", whiteSpace: "nowrap" },
   userRole: { display: "block", color: "#00d4ff", fontSize: 9, fontFamily: "'Orbitron', monospace", letterSpacing: 1.5, opacity: 0.5, marginTop: 2 },
   logoutBtn: { background: "none", border: "none", color: "#4a6080", cursor: "pointer", fontSize: 16 },
+  hamburgerBtn: { background: "none", border: "none", color: "#00d4ff", fontSize: 20, cursor: "pointer", padding: "4px 6px", flexShrink: 0 },
   main: { flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", zIndex: 1 },
-  topBar: { display: "flex", alignItems: "center", gap: 16, padding: "20px 32px", borderBottom: "1px solid rgba(0,212,255,0.1)", flexShrink: 0, background: "rgba(3,8,20,0.6)", backdropFilter: "blur(10px)" },
-  greeting: { fontSize: 22, fontWeight: 300, fontFamily: "'Orbitron', monospace", color: "#fff", letterSpacing: 1, marginBottom: 4 },
+  topBar: { display: "flex", alignItems: "center", gap: 12, padding: "16px 20px", borderBottom: "1px solid rgba(0,212,255,0.1)", flexShrink: 0, background: "rgba(3,8,20,0.6)", backdropFilter: "blur(10px)" },
+  greeting: { fontSize: 22, fontWeight: 300, fontFamily: "'Orbitron', monospace", color: "#fff", letterSpacing: 1, marginBottom: 4, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
   greetingSub: { color: "#00d4ff", fontSize: 11, fontFamily: "'Orbitron', monospace", letterSpacing: 2, opacity: 0.6 },
-  content: { flex: 1, overflowY: "auto", padding: "28px 32px" },
-  bellBtn: { position: "relative", background: "rgba(0,212,255,0.06)", border: "1px solid rgba(0,212,255,0.15)", borderRadius: 10, padding: "8px 12px", color: "#00d4ff", fontSize: 16, cursor: "pointer" },
+  content: { flex: 1, overflowY: "auto", padding: "20px 16px" },
+  bellBtn: { position: "relative", background: "rgba(0,212,255,0.06)", border: "1px solid rgba(0,212,255,0.15)", borderRadius: 10, padding: "8px 12px", color: "#00d4ff", fontSize: 16, cursor: "pointer", flexShrink: 0 },
   notifBadge: { position: "absolute", top: -4, right: -4, background: "#ef4444", color: "#fff", borderRadius: "50%", width: 18, height: 18, fontSize: 9, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Orbitron', monospace", fontWeight: 700 },
   notifDropdown: { position: "absolute", top: "calc(100% + 10px)", right: 0, width: 360, background: "rgba(5,12,28,0.98)", border: "1px solid rgba(0,212,255,0.15)", borderRadius: 12, backdropFilter: "blur(20px)", zIndex: 100, overflow: "hidden", boxShadow: "0 20px 60px rgba(0,0,0,0.4)" },
   notifHeader: { display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 16px", borderBottom: "1px solid rgba(0,212,255,0.1)" },
@@ -623,11 +698,11 @@ const s = {
   notifItemTime: { color: "#2a3f55", fontSize: 10, marginTop: 6, fontFamily: "'Orbitron', monospace" },
   notifDelBtn: { background: "none", border: "none", color: "#2a3f55", cursor: "pointer", fontSize: 14, flexShrink: 0, padding: "0 4px" },
   chatBtn: { background: "linear-gradient(135deg, rgba(0,100,160,0.8), rgba(0,60,110,0.9))", border: "1px solid rgba(0,212,255,0.25)", borderRadius: 8, color: "#00d4ff", padding: "10px 18px", fontSize: 11, fontWeight: 600, fontFamily: "'Orbitron', monospace", letterSpacing: 1, cursor: "pointer", whiteSpace: "nowrap" },
-  dashboardGrid: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(380px, 1fr))", gap: 20 },
-  card: { background: "rgba(5,15,30,0.7)", border: "1px solid rgba(0,212,255,0.12)", borderRadius: 14, padding: 22, backdropFilter: "blur(10px)" },
+  dashboardGrid: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(340px, 1fr))", gap: 16 },
+  card: { background: "rgba(5,15,30,0.7)", border: "1px solid rgba(0,212,255,0.12)", borderRadius: 14, padding: 18, backdropFilter: "blur(10px)" },
   cardTitle: { fontSize: 10, fontFamily: "'Orbitron', monospace", letterSpacing: 2, color: "#4a6080", textTransform: "uppercase", marginBottom: 14, borderBottom: "1px solid rgba(0,212,255,0.08)", paddingBottom: 8 },
   quickActions: { display: "flex", gap: 10, flexWrap: "wrap" },
-  actionBtn: { flex: "1 1 calc(16.6% - 10px)", minWidth: 120, background: "rgba(0,212,255,0.04)", border: "1px solid rgba(0,212,255,0.12)", borderRadius: 8, padding: "14px 12px", cursor: "pointer", display: "flex", alignItems: "center", gap: 8, color: "#e2e8f0", fontSize: 12, fontWeight: 600, fontFamily: "'Exo 2', sans-serif", transition: "all 0.2s" },
+  actionBtn: { flex: "1 1 calc(33% - 10px)", minWidth: 120, background: "rgba(0,212,255,0.04)", border: "1px solid rgba(0,212,255,0.12)", borderRadius: 8, padding: "12px 10px", cursor: "pointer", display: "flex", alignItems: "center", gap: 8, color: "#e2e8f0", fontSize: 12, fontWeight: 600, fontFamily: "'Exo 2', sans-serif", transition: "all 0.2s" },
   actionIcon: { fontSize: 16 },
   deadlineItem: { display: "flex", alignItems: "center", gap: 10, padding: "10px 0", borderBottom: "1px solid rgba(239,68,68,0.08)" },
   deadlineIcon: { fontSize: 18 },
@@ -657,13 +732,13 @@ const s = {
   tabPageTitle: { fontSize: 18, fontWeight: 300, fontFamily: "'Orbitron', monospace", color: "#fff", letterSpacing: 2 },
   addWishBtn: { background: "rgba(245,158,11,0.08)", border: "1px solid rgba(245,158,11,0.25)", borderRadius: 8, color: "#f59e0b", padding: "10px 18px", fontSize: 11, fontWeight: 600, fontFamily: "'Orbitron', monospace", letterSpacing: 1, cursor: "pointer" },
   wishForm: { background: "rgba(5,15,30,0.8)", border: "1px solid rgba(245,158,11,0.15)", borderRadius: 14, padding: 20, marginBottom: 24 },
-  wishFormGrid: { display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 },
+  wishFormGrid: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 },
   formInput: { background: "rgba(0,10,25,0.6)", border: "1px solid rgba(0,212,255,0.12)", borderRadius: 8, padding: "10px 14px", color: "#e2e8f0", fontSize: 13, fontFamily: "'Exo 2', sans-serif", outline: "none", width: "100%" },
   formSelect: { background: "rgba(0,10,25,0.6)", border: "1px solid rgba(0,212,255,0.12)", borderRadius: 8, padding: "10px 12px", color: "#e2e8f0", fontSize: 13, fontFamily: "'Exo 2', sans-serif", outline: "none", cursor: "pointer" },
   formSubmitBtn: { background: "rgba(245,158,11,0.15)", border: "1px solid rgba(245,158,11,0.3)", borderRadius: 8, color: "#f59e0b", padding: "10px 20px", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "'Orbitron', monospace" },
   formCancelBtn: { background: "transparent", border: "1px solid rgba(0,212,255,0.1)", borderRadius: 8, color: "#4a6080", padding: "10px 20px", fontSize: 12, cursor: "pointer" },
-  wishGrid: { display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(340px, 1fr))", gap: 18 },
-  wishCard: { background: "rgba(5,15,30,0.7)", border: "1px solid rgba(0,212,255,0.1)", borderRadius: 14, padding: 20, backdropFilter: "blur(10px)", position: "relative" },
+  wishGrid: { display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 16 },
+  wishCard: { background: "rgba(5,15,30,0.7)", border: "1px solid rgba(0,212,255,0.1)", borderRadius: 14, padding: 18, backdropFilter: "blur(10px)", position: "relative" },
   wishCardHeader: { display: "flex", alignItems: "flex-start", gap: 12, marginBottom: 8 },
   wishCardTitle: { color: "#e2e8f0", fontSize: 14, fontWeight: 600, lineHeight: 1.4 },
   wishDeadline: { color: "#4a6080", fontSize: 11, marginTop: 4 },
@@ -673,13 +748,16 @@ const s = {
   bigProgressBarWrap: { height: 6, background: "rgba(255,255,255,0.05)", borderRadius: 3, overflow: "hidden" },
   bigProgressBar: { height: "100%", borderRadius: 3, transition: "width 0.5s ease" },
   wishControls: { display: "flex", gap: 6, marginTop: 14, flexWrap: "wrap" },
-  wishControlBtn: { background: "rgba(0,212,255,0.04)", border: "1px solid rgba(0,212,255,0.12)", borderRadius: 6, color: "#00d4ff", padding: "6px 12px", fontSize: 11, cursor: "pointer", fontFamily: "'Exo 2', sans-serif" },
+  wishControlBtn: { background: "rgba(0,212,255,0.04)", border: "1px solid rgba(0,212,255,0.12)", borderRadius: 6, color: "#00d4ff", padding: "8px 12px", fontSize: 12, cursor: "pointer", fontFamily: "'Exo 2', sans-serif" },
   wishCategory: { position: "absolute", top: 14, right: 14, fontSize: 8, fontFamily: "'Orbitron', monospace", color: "#2a3f55", letterSpacing: 1 },
   emptyState: { display: "flex", flexDirection: "column", alignItems: "center", padding: "60px 20px", gap: 12, textAlign: "center" },
-  memoryGrid: { display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 14 },
+  memoryGrid: { display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 14 },
   memoryCard: { background: "rgba(5,15,30,0.7)", border: "1px solid rgba(0,212,255,0.1)", borderRadius: 12, padding: 16 },
   memoryCategoryTag: { fontSize: 8, fontFamily: "'Orbitron', monospace", color: "#00d4ff", letterSpacing: 2, marginBottom: 8, opacity: 0.7 },
   memoryCardText: { color: "#cbd5e1", fontSize: 13, lineHeight: 1.5 },
   importanceBadge: { borderRadius: 4, padding: "3px 8px", fontSize: 9, fontFamily: "'Orbitron', monospace", fontWeight: 600 },
   memoryDelBtn: { background: "none", border: "none", color: "#2a3f55", cursor: "pointer", fontSize: 13 },
+  // Mobile bottom nav
+  mobileBottomNav: { position: "fixed", bottom: 0, left: 0, right: 0, height: 64, background: "rgba(3,8,20,0.97)", borderTop: "1px solid rgba(0,212,255,0.12)", display: "flex", alignItems: "stretch", zIndex: 150, backdropFilter: "blur(16px)" },
+  mobileNavBtn: { flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 3, background: "none", border: "none", cursor: "pointer", transition: "color 0.2s", padding: "8px 4px" },
 };
