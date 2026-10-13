@@ -1,5 +1,13 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 
+function stripMarkdown(text) {
+  if (!text) return "";
+  return text
+    .replace(/[*_~`]/g, '') // Remove formatting characters
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1') // Extract text from links
+    .replace(/#/g, ''); // Remove header hashes
+}
+
 // Female voice priority list across OS/browsers
 const FEMALE_VOICE_NAMES = [
   "Google UK English Female",
@@ -62,7 +70,8 @@ export function useVoice() {
       const voices = await loadVoices();
       const voice = getBestFemaleVoice(voices);
 
-      const utterance = new SpeechSynthesisUtterance(text);
+      const cleanText = stripMarkdown(text);
+      const utterance = new SpeechSynthesisUtterance(cleanText);
       if (voice) utterance.voice = voice;
       utterance.rate = 1.0;
       utterance.pitch = 1.05;

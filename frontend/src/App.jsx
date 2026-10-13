@@ -5,6 +5,8 @@ import Onboarding from "./pages/Onboarding";
 import Chat from "./pages/Chat";
 import Dashboard from "./pages/Dashboard";
 
+import News from "./pages/News";
+
 export default function App() {
   return (
     <BrowserRouter>
@@ -14,6 +16,7 @@ export default function App() {
         <Route path="/onboarding"     element={<Onboarding />} />
         <Route path="/dashboard"      element={<Dashboard />} />
         <Route path="/chat"           element={<Chat />} />
+        <Route path="/news"           element={<News />} />
         <Route path="*"               element={<Navigate to="/login" replace />} />
       </Routes>
     </BrowserRouter>

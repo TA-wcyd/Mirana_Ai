@@ -18,6 +18,7 @@ export default function Login() {
     getMe()
       .then((d) => {
         if (d.authenticated) {
+          sessionStorage.setItem("mirana_just_logged_in", "true");
           navigate(d.user.onboardingComplete ? "/chat" : "/onboarding");
         }
       })

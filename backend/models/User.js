@@ -29,6 +29,8 @@ const UserSchema = new mongoose.Schema(
       interests: [String],
       raw: { type: String, default: "" },
     },
+    homeCountry: { type: String, default: "" },
+    currentCountry: { type: String, default: "" },
     chats: [ChatSchema],
   },
   { timestamps: true }

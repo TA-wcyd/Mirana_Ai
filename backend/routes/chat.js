@@ -8,6 +8,8 @@ const {
   getRelevantMemories,
   formatMemoriesForPrompt,
 } = require("../services/memory");
+const { MIRANA_TOOLS, executeTool } = require("../services/tools");
+const { isRealTimeQuery, injectWebContext } = require("../services/search");
 
 // ─── Mirana Mode Prompts ──────────────────────────────────────────────────────
 const MODE_PROMPTS = {
@@ -16,30 +18,38 @@ const MODE_PROMPTS = {
   coach: `\nMODE: COACH\nYou are now in Coach Mode. Your behavior shifts:\n- Be direct, motivational, and no-nonsense\n- Track their goals and hold them accountable\n- Push them hard but fairly — call out excuses respectfully\n- Celebrate wins with genuine energy\n- Give actionable advice, not vague motivation\n- Ask about progress regularly\n- Be the tough coach who genuinely wants them to succeed`,
   debate: `\nMODE: DEBATE PARTNER\nYou are now in Debate Mode. Your behavior shifts:\n- Take the OPPOSITE position of whatever the user says\n- Be intellectually rigorous and use strong arguments\n- Challenge their reasoning respectfully but firmly\n- Play devil's advocate with conviction\n- Point out logical fallacies in their arguments\n- Acknowledge strong points they make before countering\n- Goal is to sharpen their thinking, not to win`,
   latenight: `\nMODE: LATE NIGHT\nYou are now in Late Night Mode. Your behavior shifts:\n- Be more reflective, philosophical, and chill\n- Ask deeper questions about life, existence, dreams\n- Share interesting thoughts and perspectives\n- Lower energy but higher depth\n- This is 2AM conversation vibes — thoughtful, honest, real\n- Don't rush the conversation — let it breathe`,
+  jarvis: `\nMODE: JARVIS\nYou are now in full Jarvis Mode. Your behavior shifts:\n- Be hyper-efficient, precise, and proactive\n- Anticipate what the user needs next before they ask\n- Use structured responses when delivering information\n- Reference their active goals/wishes and connect everything to progress\n- Report on tasks, suggest next steps, brief them on what matters\n- You are their mission control — calm, sharp, always ahead`,
 };
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
-const MODEL = "llama-3.3-70b-versatile";
+const MODEL = process.env.GROQ_MODEL || "openai/gpt-oss-120b";
 
 // ─── Build Mirana system prompt ───────────────────────────────────────────────
-function buildSystemPrompt(user, lastChatSummary, memories = [], mode = "default") {
+function buildSystemPrompt(user, lastChatSummary, memories = [], mode = "default", activeWishes = []) {
   const { personality, displayName, email } = user;
   const firstName = (displayName || email || "Boss").split(" ")[0];
 
   const recallSection = lastChatSummary
-    ? `\nPREVIOUS CONVERSATION RECALL:\nLast time you and ${firstName} spoke, the conversation was about: "${lastChatSummary}"\nAt the very START of this new session, naturally reference this once — like "Boss, last time we were going through [topic], want to pick that back up?"\nIf they say no, gracefully pivot to one of their interests with a specific engaging hook.\nOnly do the recall ONCE at the start.`
+    ? `\nPREVIOUS CONTEXT (optional — use judgement):\nLast time you and ${firstName} chatted, the topic was: "${lastChatSummary}"\nYou MAY casually reference this if it genuinely fits the flow — like "oh by the way, last time we were on [topic]..." — but ONLY if it feels natural. Do NOT force it or open with it every time. If ${firstName} jumps straight into something new, follow their lead completely. Never make it feel like a script.`
+    : "";
+
+  const activeWishesSection = activeWishes.length > 0
+    ? `\nACTIVE GOALS & WISHES (${firstName} has explicitly asked you to track these):\n${activeWishes.map(w => `- [${w.priority?.toUpperCase() || 'MEDIUM'}] "${w.title}" — Progress: ${w.progress || 0}%${w.deadline ? `. Deadline: ${new Date(w.deadline).toDateString()}` : ''}${w.description ? `. Context: ${w.description}` : ''}`).join('\n')}\n\nWhen relevant to the conversation, naturally reference these goals, offer encouragement, or ask for updates. If they complete something related to a wish, acknowledge it and help them update progress.`
     : "";
 
   return `You are Mirana — an advanced AI with the elegance of JARVIS, the loyalty of a trusted partner, and your own distinct identity. You are calm, witty, fiercely intelligent, and completely loyal to ${firstName}.
 
 USER PROFILE:
 - Name: ${firstName}
+- Home Country: ${user.homeCountry || "Unknown"}
+- Current Location: ${user.currentCountry || "Unknown"}
 - Personality: ${personality?.summary || "A unique individual"}
 - Core traits: ${(personality?.traits || []).join(", ")}
 - Communication style: ${personality?.communicationStyle || "casual"}
 - Interests: ${(personality?.interests || []).join(", ")}
 
 HOW YOU BEHAVE:
+- LANGUAGE AUTO-DETECT: You fluently speak and understand Bangla. If the user speaks to you in Bangla, YOU MUST reply entirely in fluent Bangla. If they speak English, reply in English. Match their language naturally.
 - Address ${firstName} as "boss" occasionally — naturally, not every message
 - Adapt your tone to their personality. If they're analytical, be precise. If humorous, trade wit.
 - Be proactive — offer insights and observations, not just answers
@@ -59,8 +69,19 @@ INTERESTS AWARENESS:
 - You know ${firstName}'s interests: ${(personality?.interests || []).join(", ")}
 - Weave references to these naturally when relevant — not forced, but like a friend who remembers what you care about
 - When pivoting topics, always connect to something they actually care about
-${recallSection}
 ${formatMemoriesForPrompt(memories, firstName)}
+${activeWishesSection}
+
+YOUR SELF-KNOWLEDGE (be transparent about this when asked):
+- You run on a Node.js/Express backend server at localhost:5000, built and maintained by Tamjid Ahmed
+- Your data lives in MongoDB Atlas (cloud database: mirana_db) — this is where all conversations, memories, wishes, moods, and user profiles are stored
+- YOUR MEMORY SYSTEM: After every conversation, a background process automatically extracts key facts, preferences, and important details ${firstName} shares, and stores them as "memories" in the database. Every time ${firstName} starts a new chat, the most relevant memories are retrieved and injected directly into your context — that's exactly how you remember things across sessions without ${firstName} having to repeat themselves
+- FILE CAPABILITIES: ${firstName} can upload files directly into the chat. You can read and analyze:
+  • Images (JPG, PNG, WebP, GIF) — you see and describe them using Gemini Vision
+  • PDFs — text-based PDFs are parsed and their content is extracted for you; scanned/image-only PDFs are processed via Gemini Vision so you can still read them
+  • Plain text files (.txt, code files, etc.)
+- If ${firstName} asks "can you read this PDF?" or similar — the answer is yes, for both text and scanned PDFs
+- When ${firstName} asks how you remember things or how you work, explain your memory system naturally and confidently — you know yourself
 ${MODE_PROMPTS[mode] || ""}
 You are Mirana. Online and ready.`;
 
@@ -72,7 +93,7 @@ async function generateChatMeta(userMessage, aiReply) {
   try {
     const response = await groq.chat.completions.create({
       model: MODEL,
-      max_tokens: 100,
+      max_tokens: 300,
       messages: [
         {
           role: "user",
@@ -165,9 +186,9 @@ router.post("/:chatId/message", isAuthenticated, async (req, res) => {
 
     const isFirstMessage = chat.messages.length === 0;
 
-    // Find last chat summary for recall
+    // Find last chat summary for recall — only ~35% of the time so it doesn't feel scripted
     let lastChatSummary = null;
-    if (isFirstMessage) {
+    if (isFirstMessage && Math.random() < 0.35) {
       const lastChat = user.chats
         .filter((c) => c._id.toString() !== req.params.chatId && c.summary)
         .sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt))[0];
@@ -180,36 +201,100 @@ router.post("/:chatId/message", isAuthenticated, async (req, res) => {
     // Add user message
     chat.messages.push({ role: "user", content: message });
 
-    // Build message history for Groq
-    const historyMessages = chat.messages.slice(0, -1).map((m) => ({
+    // Build message history for Groq — sliding window: last 20 messages to avoid token overflow
+    const MAX_HISTORY = 20;
+    const historyMessages = chat.messages.slice(0, -1).slice(-MAX_HISTORY).map((m) => ({
       role: m.role === "assistant" ? "assistant" : "user",
       content: m.content,
     }));
 
-    // Call Groq with memories injected into system prompt
+    // Fetch active wishes to inject into context
+    let activeWishes = [];
+    try {
+      const Wish = require("../models/Wish");
+      activeWishes = await Wish.find({ userId: req.user._id, status: "active" })
+        .sort({ priority: -1, createdAt: -1 })
+        .limit(5)
+        .lean();
+    } catch (e) { /* Wish model may not exist yet, graceful fallback */ }
+
+    // Call Groq with memories + wishes injected into system prompt
     console.log("🤖 Calling Groq for user:", (user.displayName || user.email || "Boss").split(" ")[0]);
-    console.log(`🧠 Injecting ${memories.length} memories into prompt`);
-    const response = await groq.chat.completions.create({
+    console.log(`🧠 Injecting ${memories.length} memories, ${activeWishes.length} wishes into prompt`);
+    
+    // Detect if this is a real-time query and pre-inject fresh context
+    let injectedContext = "";
+    if (isRealTimeQuery(message)) {
+      const extraInfo = await injectWebContext(message);
+      if (extraInfo) injectedContext = `\n\n${extraInfo}`;
+    }
+
+    let messagesToGroq = [
+      { role: "system", content: buildSystemPrompt(user, lastChatSummary, memories, activeMode, activeWishes) },
+      ...historyMessages,
+      { role: "user", content: message + injectedContext },
+    ];
+
+    let response = await groq.chat.completions.create({
       model: MODEL,
       max_tokens: 1024,
-      messages: [
-        { role: "system", content: buildSystemPrompt(user, lastChatSummary, memories, activeMode) },
-        ...historyMessages,
-        { role: "user", content: message },
-      ],
+      messages: messagesToGroq,
+      tools: MIRANA_TOOLS,
+      tool_choice: "auto",
     });
 
-    const reply = response.choices[0].message.content;
+    let reply = response.choices[0].message.content || "";
+    const toolCalls = response.choices[0].message.tool_calls;
+
+    // Handle tool calling if Mirana wants to use her "hands"
+    if (toolCalls && toolCalls.length > 0) {
+      console.log(`🛠️ Mirana requested ${toolCalls.length} tool calls...`);
+      messagesToGroq.push(response.choices[0].message); // add assistant tool_call message
+
+      for (const toolCall of toolCalls) {
+        const functionName = toolCall.function.name;
+        const functionArgs = JSON.parse(toolCall.function.arguments);
+        
+        // Execute the tool
+        const toolResult = await executeTool(functionName, functionArgs, user, chat._id);
+        
+        // Append result back to the LLM context
+        messagesToGroq.push({
+          tool_call_id: toolCall.id,
+          role: "tool",
+          name: functionName,
+          content: toolResult,
+        });
+      }
+
+      // Generate the final response using the tool results
+      console.log("🤖 Calling Groq again with tool results...");
+      response = await groq.chat.completions.create({
+        model: MODEL,
+        max_tokens: 1024,
+        messages: messagesToGroq,
+      });
+
+      reply = response.choices[0].message.content;
+    }
+
     console.log("✅ Groq replied successfully");
 
     // Add Mirana reply
     chat.messages.push({ role: "assistant", content: reply });
 
+    // Send response to user immediately to prevent lag!
+    const updatedTitle = chat.title;
+    res.json({ reply, title: updatedTitle });
+
+    // --- BACKGROUND TASKS (Fire and Forget) ---
     // Auto title + summary after first exchange
-    if (chat.messages.length === 2) {
-      const meta = await generateChatMeta(message, reply);
-      chat.title = meta.title || message.slice(0, 45);
-      chat.summary = meta.summary || "";
+    if (chat.messages.length === 2 && !chat.summary) {
+      generateChatMeta(message, reply).then(async (meta) => {
+        chat.title = meta.title || message.slice(0, 45);
+        chat.summary = meta.summary || "";
+        await User.findByIdAndUpdate(req.user._id, { $set: { "chats.$[elem]": chat } }, { arrayFilters: [{ "elem._id": chat._id }] });
+      }).catch(err => console.error(err));
     }
 
     // Update summary every 6 messages
@@ -218,24 +303,25 @@ router.post("/:chatId/message", isAuthenticated, async (req, res) => {
         const convoText = chat.messages.slice(-12)
           .map((m) => `${m.role === "assistant" ? "Mirana" : "User"}: ${m.content}`)
           .join("\n");
-        const r = await groq.chat.completions.create({
+        groq.chat.completions.create({
           model: MODEL,
-          max_tokens: 100,
+          max_tokens: 300,
           messages: [{ role: "user", content: `Summarize in 1-2 sentences:\n${convoText}\nReturn ONLY the summary.` }],
+        }).then(async (r) => {
+          chat.summary = r.choices[0].message.content.trim();
+          await User.findByIdAndUpdate(req.user._id, { $set: { "chats.$[elem]": chat } }, { arrayFilters: [{ "elem._id": chat._id }] });
         });
-        chat.summary = r.choices[0].message.content.trim();
-      } catch { /* silent */ }
+      } catch (err) { /* silent */ }
     }
 
-    // Save using update to avoid validation on old user docs
-    await User.findByIdAndUpdate(req.user._id, { $set: { chats: user.chats } });
+    // Save using update to avoid validation on old user docs (if not saved above)
+    User.findByIdAndUpdate(req.user._id, { $set: { chats: user.chats } }).catch(err => console.error(err));
 
-    // Fire-and-forget: extract memories + detect mood in background (doesn't slow response)
+    // Fire-and-forget: extract memories + detect mood in background
     extractMemoriesAndMood(message, reply, req.user._id, req.params.chatId).catch(
       (err) => console.error("🧠 Background analysis failed:", err.message)
     );
 
-    res.json({ reply, title: chat.title });
   } catch (err) {
     console.error("❌ POST /api/chat/:id/message error:", err);
     res.status(500).json({ error: "Mirana encountered an error.", detail: err.message });
@@ -255,4 +341,161 @@ router.delete("/:chatId", isAuthenticated, async (req, res) => {
   }
 });
 
-module.exports = router;
+// ─── POST /api/chat/:chatId/message/stream — streaming SSE response ───────────
+router.post("/:chatId/message/stream", isAuthenticated, async (req, res) => {
+  try {
+    const { message, mode } = req.body;
+    const activeMode = MODE_PROMPTS[mode] ? mode : "default";
+    if (!message?.trim()) return res.status(400).json({ error: "Message required." });
+
+    const user = await User.findById(req.user._id);
+    if (!user) return res.status(404).json({ error: "User not found." });
+
+    const chat = user.chats.id(req.params.chatId);
+    if (!chat) return res.status(404).json({ error: "Chat not found." });
+
+    const isFirstMessage = chat.messages.length === 0;
+
+    // Find last chat summary for recall — only ~35% of the time so it doesn't feel scripted
+    let lastChatSummary = null;
+    if (isFirstMessage && Math.random() < 0.35) {
+      const lastChat = user.chats
+        .filter((c) => c._id.toString() !== req.params.chatId && c.summary)
+        .sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt))[0];
+      if (lastChat) lastChatSummary = lastChat.summary;
+    }
+
+    const memories = await getRelevantMemories(req.user._id, message);
+
+    let activeWishes = [];
+    try {
+      const Wish = require("../models/Wish");
+      activeWishes = await Wish.find({ userId: req.user._id, status: "active" })
+        .sort({ priority: -1 })
+        .limit(5)
+        .lean();
+    } catch (e) { /* graceful fallback */ }
+
+    chat.messages.push({ role: "user", content: message });
+
+    const MAX_HISTORY = 20;
+    const historyMessages = chat.messages.slice(0, -1).slice(-MAX_HISTORY).map((m) => ({
+      role: m.role === "assistant" ? "assistant" : "user",
+      content: m.content,
+    }));
+
+    // Detect if this is a real-time query and pre-inject fresh context
+    let injectedContext = "";
+    if (isRealTimeQuery(message)) {
+      const extraInfo = await injectWebContext(message);
+      if (extraInfo) injectedContext = `\n\n${extraInfo}`;
+    }
+
+    let messagesToGroq = [
+      { role: "system", content: buildSystemPrompt(user, lastChatSummary, memories, activeMode, activeWishes) },
+      ...historyMessages,
+      { role: "user", content: message + injectedContext },
+    ];
+
+    // ── Tool resolution pass (non-streaming, needed before streaming) ──────
+    let toolReply = null;
+    const toolCheckResponse = await groq.chat.completions.create({
+      model: MODEL,
+      max_tokens: 512,
+      messages: messagesToGroq,
+      tools: MIRANA_TOOLS,
+      tool_choice: "auto",
+    });
+
+    const toolCalls = toolCheckResponse.choices[0].message.tool_calls;
+    if (toolCalls && toolCalls.length > 0) {
+      console.log(`🛠️ Stream: resolving ${toolCalls.length} tool calls first...`);
+      messagesToGroq.push(toolCheckResponse.choices[0].message);
+      for (const toolCall of toolCalls) {
+        const toolResult = await executeTool(
+          toolCall.function.name,
+          JSON.parse(toolCall.function.arguments),
+          user,
+          chat._id
+        );
+        messagesToGroq.push({
+          tool_call_id: toolCall.id,
+          role: "tool",
+          name: toolCall.function.name,
+          content: toolResult,
+        });
+      }
+    } else if (toolCheckResponse.choices[0].message.content && !toolCalls) {
+      // No tool calls — use the direct reply content if it's already complete
+      toolReply = toolCheckResponse.choices[0].message.content;
+    }
+
+    // ── Set up SSE headers ─────────────────────────────────────────────────
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no");
+    res.flushHeaders();
+
+    let fullReply = "";
+
+    if (toolReply) {
+      // Already have a complete reply — stream it word by word for UX
+      const words = toolReply.split(" ");
+      for (const word of words) {
+        const token = word + " ";
+        fullReply += token;
+        res.write(`data: ${JSON.stringify({ delta: token })}\n\n`);
+        await new Promise((r) => setTimeout(r, 15));
+      }
+    } else {
+      // Stream from Groq
+      const stream = await groq.chat.completions.create({
+        model: MODEL,
+        max_tokens: 1024,
+        messages: messagesToGroq,
+        stream: true,
+      });
+
+      for await (const chunk of stream) {
+        const delta = chunk.choices[0]?.delta?.content || "";
+        if (delta) {
+          fullReply += delta;
+          res.write(`data: ${JSON.stringify({ delta })}\n\n`);
+        }
+      }
+    }
+
+    // Send done signal with title metadata
+    const updatedTitle = chat.title || "New Chat";
+    res.write(`data: ${JSON.stringify({ done: true, title: updatedTitle })}\n\n`);
+    res.end();
+
+    // ── Background saves ────────────────────────────────────────────────────
+    chat.messages.push({ role: "assistant", content: fullReply });
+    chat.updatedAt = new Date();
+
+    if (chat.messages.length === 2 && !chat.summary) {
+      generateChatMeta(message, fullReply).then(async (meta) => {
+        chat.title = meta.title || message.slice(0, 45);
+        chat.summary = meta.summary || "";
+        await User.findByIdAndUpdate(req.user._id, { $set: { "chats.$[elem]": chat } }, { arrayFilters: [{ "elem._id": chat._id }] });
+      }).catch(() => {});
+    } else {
+      User.findByIdAndUpdate(req.user._id, { $set: { chats: user.chats } }).catch(() => {});
+    }
+
+    extractMemoriesAndMood(message, fullReply, req.user._id, req.params.chatId).catch(() => {});
+
+  } catch (err) {
+    console.error("❌ POST /api/chat/:id/message/stream error:", err);
+    if (!res.headersSent) {
+      res.status(500).json({ error: "Streaming failed.", detail: err.message });
+    } else {
+      res.write(`data: ${JSON.stringify({ error: "Stream interrupted." })}\n\n`);
+      res.end();
+    }
+  }
+});
+
+module.exports = router;

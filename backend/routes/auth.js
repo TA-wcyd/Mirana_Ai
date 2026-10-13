@@ -8,17 +8,23 @@ router.get(
   passport.authenticate("google", { scope: ["profile", "email"] })
 );
 
+const getFrontendUrl = () => (process.env.FRONTEND_URL || "").replace(/\/$/, "");
+
 // Google callback
 router.get(
   "/google/callback",
-  passport.authenticate("google", {
-    failureRedirect: `${process.env.FRONTEND_URL}/login?error=auth_failed`,
-  }),
+  (req, res, next) => {
+    const frontend = getFrontendUrl();
+    passport.authenticate("google", {
+      failureRedirect: `${frontend}/login?error=auth_failed`,
+    })(req, res, next);
+  },
   (req, res) => {
+    const frontend = getFrontendUrl();
     if (!req.user.onboardingComplete) {
-      return res.redirect(`${process.env.FRONTEND_URL}/onboarding`);
+      return res.redirect(`${frontend}/onboarding`);
     }
-    res.redirect(`${process.env.FRONTEND_URL}/chat`);
+    res.redirect(`${frontend}/chat`);
   }
 );
 
