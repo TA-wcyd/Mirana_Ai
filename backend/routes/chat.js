@@ -1,7 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const Groq = require("groq-sdk");
-const User = require("../models/user");
+const User = require("../models/User");
 const { isAuthenticated } = require("../middleware/auth");
 const {
   extractMemoriesAndMood,

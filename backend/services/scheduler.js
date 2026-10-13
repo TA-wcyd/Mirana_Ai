@@ -1,5 +1,5 @@
 const cron = require("node-cron");
-const User = require("../models/user");
+const User = require("../models/User");
 const Wish = require("../models/Wish");
 const Notification = require("../models/Notification");
 const Groq = require("groq-sdk");

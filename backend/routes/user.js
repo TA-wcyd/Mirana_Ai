@@ -1,7 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const { GoogleGenerativeAI } = require("@google/generative-ai");
-const User = require("../models/user");
+const User = require("../models/User");
 const { isAuthenticated } = require("../middleware/auth");
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);

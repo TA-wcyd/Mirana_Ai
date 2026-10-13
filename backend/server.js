@@ -22,7 +22,7 @@ if (isProd) {
   app.set("trust proxy", 1);
 }
 
-require("./config/Passport");
+require("./config/passport");
 
 app.use(express.json());
 app.use(cookieParser());
@@ -107,7 +107,7 @@ if (fs.existsSync(frontendDist)) {
 }
 
 app.get("/fix-users", async (req, res) => {
-  const User = require("./models/user");
+  const User = require("./models/User");
   const result = await User.updateMany(
     { displayName: { $exists: false } },
     { $set: { displayName: "User", onboardingComplete: false } }
