@@ -21,10 +21,18 @@ router.get(
   },
   (req, res) => {
     const frontend = getFrontendUrl();
-    if (!req.user.onboardingComplete) {
-      return res.redirect(`${frontend}/onboarding`);
-    }
-    res.redirect(`${frontend}/chat`);
+    const target = req.user.onboardingComplete
+      ? `${frontend}/chat`
+      : `${frontend}/onboarding`;
+
+    // Explicitly save session before redirecting — required with Express 5 + MongoStore
+    // to guarantee the session is flushed to MongoDB before the browser's next request
+    req.session.save((err) => {
+      if (err) {
+        console.error("[auth] Session save error after Google OAuth:", err);
+      }
+      res.redirect(target);
+    });
   }
 );
 

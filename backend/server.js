@@ -55,11 +55,12 @@ app.use(
       mongoUrl: process.env.MONGO_URI,
       collectionName: "sessions",
       ttl: 7 * 24 * 60 * 60, // 7 days in seconds
-      autoRemove: "native",
+      autoRemove: "interval",
+      autoRemoveInterval: 10, // check every 10 minutes
     }),
     cookie: {
       secure: isProd,
-      sameSite: isProd ? "none" : "lax", // "none" required for cross-site cookies in production
+      sameSite: "lax", // same-origin app — lax is correct and sufficient
       httpOnly: true,
       maxAge: 7 * 24 * 60 * 60 * 1000,
     },
