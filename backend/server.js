@@ -9,6 +9,7 @@ const express = require("express");
 const mongoose = require("mongoose");
 const cors = require("cors");
 const session = require("express-session");
+const MongoStore = require("connect-mongo");
 const passport = require("passport");
 const cookieParser = require("cookie-parser");
 const path = require("path");
@@ -49,9 +50,16 @@ app.use(
     resave: false,
     saveUninitialized: false,
     proxy: isProd,
+    // Persist sessions in MongoDB so they survive Render restarts / cold starts
+    store: MongoStore.create({
+      mongoUrl: process.env.MONGO_URI,
+      collectionName: "sessions",
+      ttl: 7 * 24 * 60 * 60, // 7 days in seconds
+      autoRemove: "native",
+    }),
     cookie: {
       secure: isProd,
-      sameSite: "lax",
+      sameSite: isProd ? "none" : "lax", // "none" required for cross-site cookies in production
       httpOnly: true,
       maxAge: 7 * 24 * 60 * 60 * 1000,
     },
