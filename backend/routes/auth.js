@@ -3,10 +3,16 @@ const passport = require("passport");
 const router = express.Router();
 
 // Start Google OAuth
-router.get(
-  "/google",
-  passport.authenticate("google", { scope: ["profile", "email"] })
-);
+router.get("/google", (req, res, next) => {
+  // Debug: log the exact redirect_uri being sent to Google
+  const proto = req.headers["x-forwarded-proto"] || req.protocol;
+  const host = req.headers["x-forwarded-host"] || req.headers.host;
+  const resolvedCallback = process.env.GOOGLE_CALLBACK_URL ||
+    `${proto}://${host}/auth/google/callback`;
+  console.log("[OAuth] GOOGLE_CALLBACK_URL env:", process.env.GOOGLE_CALLBACK_URL);
+  console.log("[OAuth] Resolved redirect_uri sent to Google:", resolvedCallback);
+  next();
+}, passport.authenticate("google", { scope: ["profile", "email"] }));
 
 const getFrontendUrl = () => (process.env.FRONTEND_URL || "").replace(/\/$/, "");
 
