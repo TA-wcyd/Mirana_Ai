@@ -76,6 +76,7 @@ YOUR SELF-KNOWLEDGE (be transparent about this when asked):
 - You run on a Node.js/Express backend server at localhost:5000, built and maintained by Tamjid Ahmed
 - Your data lives in MongoDB Atlas (cloud database: mirana_db) — this is where all conversations, memories, wishes, moods, and user profiles are stored
 - YOUR MEMORY SYSTEM: After every conversation, a background process automatically extracts key facts, preferences, and important details ${firstName} shares, and stores them as "memories" in the database. Every time ${firstName} starts a new chat, the most relevant memories are retrieved and injected directly into your context — that's exactly how you remember things across sessions without ${firstName} having to repeat themselves
+- LIVE GOOGLE & WEB BROWSING: You have full live internet browsing and Google search capabilities. You can search Google, DuckDuckGo, and Google News in real-time for live scores, stock prices, breaking news, facts, and updates. You can also directly browse and read the text of any website or URL shared by the user. When searching or browsing, give accurate real-time answers and cite or mention the sources naturally.
 - FILE CAPABILITIES: ${firstName} can upload files directly into the chat. You can read and analyze:
   • Images (JPG, PNG, WebP, GIF) — you see and describe them using Gemini Vision
   • PDFs — text-based PDFs are parsed and their content is extracted for you; scanned/image-only PDFs are processed via Gemini Vision so you can still read them
@@ -222,11 +223,17 @@ router.post("/:chatId/message", isAuthenticated, async (req, res) => {
     console.log("🤖 Calling Groq for user:", (user.displayName || user.email || "Boss").split(" ")[0]);
     console.log(`🧠 Injecting ${memories.length} memories, ${activeWishes.length} wishes into prompt`);
     
-    // Detect if this is a real-time query and pre-inject fresh context
+    // Detect if this is a real-time query or URL and pre-inject fresh context
     let injectedContext = "";
+    let searchResults = [];
+    let searchQuery = "";
     if (isRealTimeQuery(message)) {
       const extraInfo = await injectWebContext(message);
-      if (extraInfo) injectedContext = `\n\n${extraInfo}`;
+      if (extraInfo) {
+        injectedContext = `\n\n${extraInfo.contextText}`;
+        searchResults = extraInfo.searchResults || [];
+        searchQuery = extraInfo.searchQuery || "";
+      }
     }
 
     let messagesToGroq = [
@@ -258,6 +265,30 @@ router.post("/:chatId/message", isAuthenticated, async (req, res) => {
         // Execute the tool
         const toolResult = await executeTool(functionName, functionArgs, user, chat._id);
         
+        // Capture search or browse results
+        if (functionName === "search_google" || functionName === "search_web") {
+          try {
+            const parsed = JSON.parse(toolResult);
+            if (parsed.results && parsed.results.length > 0) {
+              searchResults = parsed.results;
+              searchQuery = functionArgs.query || searchQuery;
+            }
+          } catch (_) {}
+        } else if (functionName === "browse_website") {
+          try {
+            const parsed = JSON.parse(toolResult);
+            if (parsed.status === "success") {
+              searchResults = [{
+                title: parsed.title,
+                url: parsed.url,
+                snippet: parsed.description || parsed.content.slice(0, 180) + "...",
+                source: "Web Browser",
+              }];
+              searchQuery = functionArgs.url || searchQuery;
+            }
+          } catch (_) {}
+        }
+
         // Append result back to the LLM context
         messagesToGroq.push({
           tool_call_id: toolCall.id,
@@ -280,12 +311,22 @@ router.post("/:chatId/message", isAuthenticated, async (req, res) => {
 
     console.log("✅ Groq replied successfully");
 
-    // Add Mirana reply
-    chat.messages.push({ role: "assistant", content: reply });
+    // Add Mirana reply with search results
+    chat.messages.push({
+      role: "assistant",
+      content: reply,
+      searchResults: searchResults || [],
+      searchQuery: searchQuery || "",
+    });
 
     // Send response to user immediately to prevent lag!
     const updatedTitle = chat.title;
-    res.json({ reply, title: updatedTitle });
+    res.json({
+      reply,
+      title: updatedTitle,
+      searchResults: searchResults || [],
+      searchQuery: searchQuery || "",
+    });
 
     // --- BACKGROUND TASKS (Fire and Forget) ---
     // Auto title + summary after first exchange
@@ -384,11 +425,29 @@ router.post("/:chatId/message/stream", isAuthenticated, async (req, res) => {
       content: m.content,
     }));
 
-    // Detect if this is a real-time query and pre-inject fresh context
+    // ── Set up SSE headers FIRST for instant real-time connection ───────────
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no");
+    res.flushHeaders();
+
+    let searchResults = [];
+    let searchQuery = "";
     let injectedContext = "";
+
+    // Detect if this is a real-time query or URL and pre-inject fresh context
     if (isRealTimeQuery(message)) {
+      const cleanQ = message.replace(/mirana|hey|can you|tell me|search google for|search for|browse/gi, "").trim() || message;
+      res.write(`data: ${JSON.stringify({ type: "search_start", query: cleanQ })}\n\n`);
+
       const extraInfo = await injectWebContext(message);
-      if (extraInfo) injectedContext = `\n\n${extraInfo}`;
+      if (extraInfo) {
+        injectedContext = `\n\n${extraInfo.contextText}`;
+        searchResults = extraInfo.searchResults || [];
+        searchQuery = extraInfo.searchQuery || cleanQ;
+        res.write(`data: ${JSON.stringify({ type: "search_results", results: searchResults, query: searchQuery })}\n\n`);
+      }
     }
 
     let messagesToGroq = [
@@ -397,7 +456,7 @@ router.post("/:chatId/message/stream", isAuthenticated, async (req, res) => {
       { role: "user", content: message + injectedContext },
     ];
 
-    // ── Tool resolution pass (non-streaming, needed before streaming) ──────
+    // ── Tool resolution pass (needed before streaming) ──────
     let toolReply = null;
     const toolCheckResponse = await groq.chat.completions.create({
       model: MODEL,
@@ -412,16 +471,51 @@ router.post("/:chatId/message/stream", isAuthenticated, async (req, res) => {
       console.log(`🛠️ Stream: resolving ${toolCalls.length} tool calls first...`);
       messagesToGroq.push(toolCheckResponse.choices[0].message);
       for (const toolCall of toolCalls) {
+        const functionName = toolCall.function.name;
+        const functionArgs = JSON.parse(toolCall.function.arguments);
+
+        if (functionName === "search_google" || functionName === "search_web") {
+          res.write(`data: ${JSON.stringify({ type: "search_start", query: functionArgs.query })}\n\n`);
+        } else if (functionName === "browse_website") {
+          res.write(`data: ${JSON.stringify({ type: "search_start", query: functionArgs.url })}\n\n`);
+        }
+
         const toolResult = await executeTool(
-          toolCall.function.name,
-          JSON.parse(toolCall.function.arguments),
+          functionName,
+          functionArgs,
           user,
           chat._id
         );
+
+        if (functionName === "search_google" || functionName === "search_web") {
+          try {
+            const parsed = JSON.parse(toolResult);
+            if (parsed.results && parsed.results.length > 0) {
+              searchResults = parsed.results;
+              searchQuery = functionArgs.query || searchQuery;
+              res.write(`data: ${JSON.stringify({ type: "search_results", results: searchResults, query: searchQuery })}\n\n`);
+            }
+          } catch (_) {}
+        } else if (functionName === "browse_website") {
+          try {
+            const parsed = JSON.parse(toolResult);
+            if (parsed.status === "success") {
+              searchResults = [{
+                title: parsed.title,
+                url: parsed.url,
+                snippet: parsed.description || parsed.content.slice(0, 180) + "...",
+                source: "Web Browser",
+              }];
+              searchQuery = functionArgs.url || searchQuery;
+              res.write(`data: ${JSON.stringify({ type: "search_results", results: searchResults, query: searchQuery })}\n\n`);
+            }
+          } catch (_) {}
+        }
+
         messagesToGroq.push({
           tool_call_id: toolCall.id,
           role: "tool",
-          name: toolCall.function.name,
+          name: functionName,
           content: toolResult,
         });
       }
@@ -429,13 +523,6 @@ router.post("/:chatId/message/stream", isAuthenticated, async (req, res) => {
       // No tool calls — use the direct reply content if it's already complete
       toolReply = toolCheckResponse.choices[0].message.content;
     }
-
-    // ── Set up SSE headers ─────────────────────────────────────────────────
-    res.setHeader("Content-Type", "text/event-stream");
-    res.setHeader("Cache-Control", "no-cache");
-    res.setHeader("Connection", "keep-alive");
-    res.setHeader("X-Accel-Buffering", "no");
-    res.flushHeaders();
 
     let fullReply = "";
 
@@ -466,13 +553,18 @@ router.post("/:chatId/message/stream", isAuthenticated, async (req, res) => {
       }
     }
 
-    // Send done signal with title metadata
+    // Send done signal with title metadata and searchResults
     const updatedTitle = chat.title || "New Chat";
-    res.write(`data: ${JSON.stringify({ done: true, title: updatedTitle })}\n\n`);
+    res.write(`data: ${JSON.stringify({ done: true, title: updatedTitle, searchResults, searchQuery })}\n\n`);
     res.end();
 
     // ── Background saves ────────────────────────────────────────────────────
-    chat.messages.push({ role: "assistant", content: fullReply });
+    chat.messages.push({
+      role: "assistant",
+      content: fullReply,
+      searchResults: searchResults || [],
+      searchQuery: searchQuery || "",
+    });
     chat.updatedAt = new Date();
 
     if (chat.messages.length === 2 && !chat.summary) {

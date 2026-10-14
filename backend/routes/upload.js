@@ -6,7 +6,36 @@ const { GoogleGenerativeAI } = require("@google/generative-ai");
 const User = require("../models/User");
 const { isAuthenticated } = require("../middleware/auth");
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+const Groq = require("groq-sdk");
+const genAI = process.env.GEMINI_API_KEY ? new GoogleGenerativeAI(process.env.GEMINI_API_KEY) : null;
+const groq = process.env.GROQ_API_KEY ? new Groq({ apiKey: process.env.GROQ_API_KEY }) : null;
+
+async function generateTextReply(promptText) {
+  // 1. Try Groq (fast, reliable)
+  if (groq) {
+    try {
+      const res = await groq.chat.completions.create({
+        model: process.env.GROQ_MODEL || "llama-3.3-70b-versatile",
+        messages: [{ role: "user", content: promptText }],
+      });
+      const text = res.choices[0]?.message?.content?.trim();
+      if (text) return text;
+    } catch (e) {
+      console.warn("Groq text analysis error, trying Gemini:", e.message);
+    }
+  }
+  // 2. Try Gemini
+  if (genAI) {
+    try {
+      const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+      const result = await model.generateContent(promptText);
+      return result.response.text();
+    } catch (e) {
+      console.warn("Gemini text analysis error:", e.message);
+    }
+  }
+  return "I was able to inspect your file, boss, but encountered a temporary connection issue generating the full summary. Please try asking me a specific question about it.";
+}
 
 // Store in memory (files are processed immediately, not persisted)
 const upload = multer({
@@ -83,7 +112,7 @@ router.post("/:chatId/upload", isAuthenticated, upload.single("file"), async (re
         const trimmedText = pdfText.trim().slice(0, 12000);
         const wasTrimmed = pdfText.length > 12000;
 
-        const result = await visionModel.generateContent(
+        reply = await generateTextReply(
           `You are Mirana, an advanced AI assistant for ${firstName}. The user uploaded a PDF named "${req.file.originalname}" (${pageCount} page${pageCount !== 1 ? "s" : ""}).${wasTrimmed ? " Note: the file was long so only the first portion is shown." : ""}
 
 Here is the extracted text content:
@@ -95,7 +124,6 @@ User's request: ${userPrompt}
 
 Analyze it thoroughly and respond naturally. If it's a study document, help them understand it. If it's a report or contract, summarize the key points. If it's technical, explain it clearly.`
         );
-        reply = result.response.text();
         console.log(`📄 PDF analyzed via text extraction`);
 
       } else {
@@ -120,13 +148,9 @@ Analyze it thoroughly and respond naturally. If it's a study document, help them
     } else {
       // ── Plain text files ─────────────────────────────────────────────────
       const textContent = req.file.buffer.toString("utf-8").slice(0, 12000);
-      const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
-
-      const result = await model.generateContent(
+      reply = await generateTextReply(
         `You are Mirana, an advanced AI assistant for ${firstName}. The user uploaded a text file (${req.file.originalname}). Here's the content:\n\n---\n${textContent}\n---\n\n${userPrompt}\n\nAnalyze it and respond naturally with insight.`
       );
-
-      reply = result.response.text();
     }
 
     // Store in chat history

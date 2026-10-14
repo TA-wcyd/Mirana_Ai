@@ -4,6 +4,9 @@ const MessageSchema = new mongoose.Schema({
   role: { type: String, enum: ["user", "assistant"], required: true },
   content: { type: String, required: true },
   timestamp: { type: Date, default: Date.now },
+  searchResults: { type: Array, default: [] },
+  searchQuery: { type: String, default: "" },
+  browsedUrl: { type: String, default: "" },
 });
 
 const ChatSchema = new mongoose.Schema({

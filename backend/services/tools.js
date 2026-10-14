@@ -1,5 +1,5 @@
 const { getLatestNews } = require("./news");
-const { performWebSearch } = require("./search");
+const { performUnifiedWebSearch, browseWebsite, performWebSearch } = require("./search");
 const Wish = require("../models/Wish");
 const Notification = require("../models/Notification");
 
@@ -25,8 +25,42 @@ const MIRANA_TOOLS = [
   {
     type: "function",
     function: {
+      name: "search_google",
+      description: "Search Google in real time for live information, current scores, breaking news, facts, prices, weather, and recent events. Use this when the user asks to search Google, search online, or check current world facts.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: {
+            type: "string",
+            description: "The Google search query to look up.",
+          },
+        },
+        required: ["query"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "browse_website",
+      description: "Browse and extract full text and details from any website or URL. Use this when the user gives a link (https://...) or asks you to visit, read, or summarize a web page or article.",
+      parameters: {
+        type: "object",
+        properties: {
+          url: {
+            type: "string",
+            description: "The URL of the website or article to browse.",
+          },
+        },
+        required: ["url"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "search_web",
-      description: "Search the web for real-time information. Use this when asked about recent events, current data, or anything you don't know.",
+      description: "Search the web for real-time information across multiple engines. Use this when asked about recent events, current data, or anything you don't know.",
       parameters: {
         type: "object",
         properties: {
@@ -184,14 +218,25 @@ async function executeTool(toolName, args, user, chatId) {
     return JSON.stringify(result);
   }
 
-  // ── Web Search ────────────────────────────────────────────────────────────
-  if (toolName === "search_web") {
+  // ── Google & Multi-engine Web Search ─────────────────────────────────────
+  if (toolName === "search_google" || toolName === "search_web") {
     try {
-      const searchData = await performWebSearch(args.query);
+      const searchData = await performUnifiedWebSearch(args.query);
       return JSON.stringify(searchData);
     } catch (error) {
       console.error(`❌ Web search error:`, error.message);
       return JSON.stringify({ status: "error", message: "Failed to fetch web results." });
+    }
+  }
+
+  // ── Browse Website / URL ──────────────────────────────────────────────────
+  if (toolName === "browse_website") {
+    try {
+      const pageData = await browseWebsite(args.url);
+      return JSON.stringify(pageData);
+    } catch (error) {
+      console.error(`❌ Browse website error:`, error.message);
+      return JSON.stringify({ status: "error", message: `Failed to browse ${args.url}: ${error.message}` });
     }
   }
 

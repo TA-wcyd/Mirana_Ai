@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useNavigate, useSearchParams, Link } from "react-router-dom";
 import MiranaOrb from "../components/MiranaOrb";
+import { WebSearchHUD } from "../components/WebSearchHUD";
 import { useVoice } from "../hooks/useVoice";
 import {
   getMe, getChats, createChat, getChat,
@@ -33,6 +34,7 @@ export default function Chat() {
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [streamingText, setStreamingText] = useState("");
+  const [streamingSearch, setStreamingSearch] = useState(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [activeTitle, setActiveTitle] = useState("NEW SESSION");
   const [error, setError] = useState("");
@@ -143,6 +145,7 @@ export default function Chat() {
     const msg = (overrideText !== undefined ? overrideText : input).trim();
     if (!msg || loadingRef.current) return;
 
+    stopListening();
     setError("");
     setLoading(true);
     loadingRef.current = true;
@@ -168,7 +171,10 @@ export default function Chat() {
     if (overrideText === undefined) setInput("");
 
     let fullReply = "";
+    let latestSearchResults = [];
+    let latestSearchQuery = "";
     setStreamingText("");
+    setStreamingSearch(null);
 
     try {
       abortControllerRef.current = new AbortController();
@@ -203,12 +209,28 @@ export default function Chat() {
               throw new Error(parsed.error);
             }
 
+            if (parsed.type === "search_start") {
+              setStreamingSearch({ searching: true, query: parsed.query, results: [] });
+            }
+
+            if (parsed.type === "search_results") {
+              latestSearchResults = parsed.results || [];
+              latestSearchQuery = parsed.query || "";
+              setStreamingSearch({ searching: false, query: latestSearchQuery, results: latestSearchResults });
+            }
+
             if (parsed.delta) {
               fullReply += parsed.delta;
               setStreamingText(fullReply);
             }
 
             if (parsed.done) {
+              if (parsed.searchResults?.length) {
+                latestSearchResults = parsed.searchResults;
+              }
+              if (parsed.searchQuery) {
+                latestSearchQuery = parsed.searchQuery;
+              }
               if (parsed.title && parsed.title !== "New Chat") {
                 setActiveTitle(parsed.title.toUpperCase());
                 loadChats();
@@ -220,9 +242,18 @@ export default function Chat() {
         }
       }
 
-      // Streaming complete — commit the full message
+      // Streaming complete — commit the full message with search results
       setStreamingText("");
-      setMessages((prev) => [...prev, { role: "assistant", content: fullReply }]);
+      setStreamingSearch(null);
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: "assistant",
+          content: fullReply,
+          searchResults: latestSearchResults,
+          searchQuery: latestSearchQuery,
+        },
+      ]);
       speak(fullReply);
 
     } catch (err) {
@@ -231,7 +262,15 @@ export default function Chat() {
       // Fallback to non-streaming if stream fails
       try {
         const data = await sendMessage(chatId, msg, mode);
-        setMessages((prev) => [...prev, { role: "assistant", content: data.reply }]);
+        setMessages((prev) => [
+          ...prev,
+          {
+            role: "assistant",
+            content: data.reply,
+            searchResults: data.searchResults || [],
+            searchQuery: data.searchQuery || "",
+          },
+        ]);
         if (data.title) { setActiveTitle(data.title.toUpperCase()); loadChats(); }
         speak(data.reply);
         loadActiveWishes();
@@ -249,11 +288,12 @@ export default function Chat() {
       }
     } finally {
       setStreamingText("");
+      setStreamingSearch(null);
       setLoading(false);
       loadingRef.current = false;
       abortControllerRef.current = null;
     }
-  }, [input, mode, speak, stopSpeaking]);
+  }, [input, mode, speak, stopSpeaking, stopListening]);
 
   const handleKey = (e) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -306,10 +346,29 @@ export default function Chat() {
   };
 
   const handleMic = () => {
-    if (isListening) { stopListening(); return; }
+    if (isListening) {
+      stopListening();
+      return;
+    }
+    setError("");
     startListening(
-      (transcript) => { setInput(transcript); handleSend(transcript); },
-      (err) => console.warn("STT error:", err)
+      (transcript) => {
+        setInput(transcript);
+        handleSend(transcript);
+      },
+      (err) => {
+        console.warn("STT error:", err);
+        if (err === "not-allowed" || err?.includes?.("permission")) {
+          setError("Microphone permission denied. Allow microphone access in your browser settings.");
+        } else if (err === "not-supported" || err?.includes?.("not supported")) {
+          setError("Speech recognition is not supported in this browser. Try Chrome or Safari.");
+        } else if (err !== "no-speech") {
+          setError(`Microphone error: ${err}`);
+        }
+      },
+      (interim) => {
+        setInput(interim);
+      }
     );
   };
 
@@ -509,6 +568,22 @@ export default function Chat() {
                   ))}
                 </div>
               )}
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "center", marginTop: 4 }}>
+                <button
+                  style={s.searchHintChip}
+                  disabled={loading}
+                  onClick={() => handleSend("Browse Google for latest technology news 2026")}
+                >
+                  🌐 Latest Tech News
+                </button>
+                <button
+                  style={s.searchHintChip}
+                  disabled={loading}
+                  onClick={() => handleSend("Search Google for latest Champions League scores and match results")}
+                >
+                  ⚽ Live Match Scores
+                </button>
+              </div>
               {(user?.personality?.interests || []).length > 0 && (
                 <div style={s.interestHints}>
                   {user.personality.interests.slice(0, 3).map((interest) => (
@@ -530,26 +605,85 @@ export default function Chat() {
             <div style={s.speakingOverlay}>
               <MiranaOrb isSpeaking={isSpeaking} isListening={isListening} size={60} />
               <p style={s.speakingLabel}>
-                {isListening ? "LISTENING…" : "MIRANA SPEAKING…"}
+                {isListening ? "LISTENING…" : "MIRANA TALKING…"}
               </p>
             </div>
           )}
 
           {messages.map((m, i) => (
-            <div key={i} style={{ ...s.msgRow, justifyContent: m.role === "user" ? "flex-end" : "flex-start", maxWidth: isMobile ? "92%" : "78%" }}>
-              {m.role === "assistant" && <div style={s.miranaAvatar}>M</div>}
-              <div style={{ ...s.bubble, ...(m.role === "user" ? s.userBubble : s.miranaBubble), fontSize: isMobile ? 13 : 14 }}>
-                {m.content}
+            <div
+              key={i}
+              style={{
+                ...s.msgRow,
+                justifyContent: m.role === "user" ? "flex-end" : "flex-start",
+                maxWidth: isMobile ? "94%" : "82%",
+                flexDirection: "column",
+                alignItems: m.role === "user" ? "flex-end" : "flex-start",
+              }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "flex-end",
+                  gap: 8,
+                  width: "100%",
+                  justifyContent: m.role === "user" ? "flex-end" : "flex-start",
+                }}
+              >
+                {m.role === "assistant" && <div style={s.miranaAvatar}>M</div>}
+                <div
+                  style={{
+                    ...s.bubble,
+                    ...(m.role === "user" ? s.userBubble : s.miranaBubble),
+                    fontSize: isMobile ? 13 : 14,
+                  }}
+                >
+                  {m.content}
+                </div>
+                {m.role === "user" && user?.photo && (
+                  <img src={user.photo} alt="" style={s.userAvatarMsg} referrerPolicy="no-referrer" />
+                )}
               </div>
-              {m.role === "user" && user?.photo && (
-                <img src={user.photo} alt="" style={s.userAvatarMsg} referrerPolicy="no-referrer" />
+
+              {m.role === "assistant" && m.searchResults && m.searchResults.length > 0 && (
+                <div style={{ width: "100%", paddingLeft: isMobile ? 0 : 36, marginTop: 4 }}>
+                  <WebSearchHUD
+                    query={m.searchQuery}
+                    results={m.searchResults}
+                    onBrowseUrl={(url) => handleSend(`Browse and summarize this webpage: ${url}`)}
+                    isSpeaking={isSpeaking && i === messages.length - 1}
+                  />
+                </div>
               )}
             </div>
           ))}
 
+          {/* Live streaming search banner & search results HUD while talking / generating */}
+          {streamingSearch && (
+            <div style={{ width: "100%", maxWidth: isMobile ? "94%" : "82%", paddingLeft: isMobile ? 0 : 36, marginBottom: 4 }}>
+              {streamingSearch.searching && (
+                <div style={s.searchLiveBanner}>
+                  <div style={s.searchRadar}>🌐</div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                    <span style={s.searchLiveTitle}>BROWSING GOOGLE & WEB</span>
+                    <span style={s.searchLiveQuery}>"{streamingSearch.query}"</span>
+                  </div>
+                </div>
+              )}
+              {streamingSearch.results && streamingSearch.results.length > 0 && (
+                <WebSearchHUD
+                  query={streamingSearch.query}
+                  results={streamingSearch.results}
+                  onBrowseUrl={(url) => handleSend(`Browse and summarize this webpage: ${url}`)}
+                  isSpeaking={isSpeaking}
+                />
+              )}
+            </div>
+          )}
+
           {/* Live streaming bubble */}
           {streamingText && (
-            <div style={{ ...s.msgRow, justifyContent: "flex-start" }}>
+            <div style={{ ...s.msgRow, justifyContent: "flex-start", maxWidth: isMobile ? "94%" : "82%" }}>
               <div style={s.miranaAvatar}>M</div>
               <div style={{ ...s.bubble, ...s.miranaBubble, ...s.streamingBubble }}>
                 {streamingText}
@@ -580,19 +714,24 @@ export default function Chat() {
               background: loading ? "#f59e0b" : isListening ? "#ff5050" : "#00d4ff"
             }} />
             <span style={s.statusText}>
-              {isListening ? "LISTENING" : isSpeaking ? "SPEAKING" : loading ? (streamingText ? "STREAMING" : "PROCESSING") : "READY"}
+              {isListening
+                ? (input ? "LISTENING (3s pause to send)" : "LISTENING…")
+                : isSpeaking
+                ? "SPEAKING"
+                : loading
+                ? (streamingText ? "STREAMING" : "PROCESSING")
+                : "READY"}
             </span>
           </div>
           <div style={s.inputRow}>
             <textarea
               ref={textareaRef}
-              style={s.input}
-              placeholder="Message Mirana…"
+              style={{ ...s.input, minHeight: isMobile ? 40 : 44 }}
+              placeholder={isListening ? "Listening… pause 3s to send" : "Message Mirana…"}
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKey}
               rows={1}
-              disabled={isListening}
             />
             <input
               type="file"
@@ -611,10 +750,13 @@ export default function Chat() {
             <button
               style={{
                 ...s.iconBtn,
-                color: isListening ? "#ff5050" : "#4a6080",
-                border: `1px solid ${isListening ? "rgba(255,80,80,0.4)" : "rgba(0,212,255,0.1)"}`,
+                color: isListening ? "#ff5050" : "#00d4ff",
+                border: `1px solid ${isListening ? "rgba(255,80,80,0.6)" : "rgba(0,212,255,0.15)"}`,
+                background: isListening ? "rgba(255,80,80,0.12)" : "rgba(0,10,25,0.6)",
+                boxShadow: isListening ? "0 0 10px rgba(255,80,80,0.4)" : "none",
               }}
               onClick={handleMic}
+              title={isListening ? "Tap to cancel listening" : "Voice input"}
             >
               🎤
             </button>
@@ -654,7 +796,7 @@ const TEXT = "#e2e8f0";
 const MUTED = "#4a6080";
 
 const s = {
-  root: { display: "flex", height: "100vh", background: BG, fontFamily: "'Exo 2', sans-serif", color: TEXT, overflow: "hidden", position: "relative" },
+  root: { display: "flex", height: "100dvh", minHeight: "100vh", background: BG, fontFamily: "'Exo 2', sans-serif", color: TEXT, overflow: "hidden", position: "relative" },
   grid: { position: "absolute", inset: 0, backgroundImage: `linear-gradient(rgba(0,212,255,0.025) 1px, transparent 1px),linear-gradient(90deg, rgba(0,212,255,0.025) 1px, transparent 1px)`, backgroundSize: "40px 40px", pointerEvents: "none", zIndex: 0 },
   sidebar: { background: "rgba(3,8,20,0.95)", borderRight: `1px solid ${BORDER}`, display: "flex", flexDirection: "column", transition: "width 0.25s ease", flexShrink: 0, overflow: "hidden", zIndex: 10 },
   sidebarInner: { width: 270, display: "flex", flexDirection: "column", height: "100%", padding: "20px 14px" },
@@ -721,4 +863,9 @@ const s = {
   input: { flex: 1, background: "rgba(0,10,25,0.6)", border: `1px solid rgba(0,212,255,0.12)`, borderRadius: 12, padding: "12px 16px", color: TEXT, fontSize: 14, fontFamily: "'Exo 2', sans-serif", lineHeight: 1.5, transition: "border-color 0.2s" },
   iconBtn: { width: 44, height: 44, borderRadius: 10, background: "rgba(0,10,25,0.6)", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, flexShrink: 0 },
   sendBtn: { width: 44, height: 44, borderRadius: 10, background: "linear-gradient(135deg, rgba(0,100,160,0.8), rgba(0,60,110,0.9))", border: `1px solid rgba(0,212,255,0.25)`, color: CYAN, fontSize: 18, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, transition: "opacity 0.2s" },
+  searchHintChip: { background: "rgba(0,212,255,0.08)", border: "1px solid rgba(0,212,255,0.25)", borderRadius: 20, color: "#38bdf8", padding: "7px 14px", fontSize: 12, cursor: "pointer", fontFamily: "'Exo 2', sans-serif", transition: "all 0.2s" },
+  searchLiveBanner: { display: "flex", alignItems: "center", gap: 10, background: "rgba(0, 25, 45, 0.75)", border: "1px solid rgba(0, 212, 255, 0.3)", borderRadius: 10, padding: "8px 12px", marginBottom: 6, backdropFilter: "blur(8px)" },
+  searchRadar: { fontSize: 18, animation: "statusPulse 1s infinite alternate" },
+  searchLiveTitle: { fontSize: 10, fontWeight: 700, letterSpacing: 1.5, color: CYAN, fontFamily: "'Orbitron', monospace" },
+  searchLiveQuery: { fontSize: 12, color: "#94a3b8", fontStyle: "italic", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" },
 };

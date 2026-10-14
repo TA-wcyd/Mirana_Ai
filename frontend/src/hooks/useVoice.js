@@ -100,12 +100,41 @@ export function useVoice() {
 
   const silenceTimerRef = useRef(null);
   const accumulatedTranscriptRef = useRef("");
+  const isManuallyStoppedRef = useRef(false);
+  const onResultRef = useRef(null);
+  const onErrorRef = useRef(null);
+  const onInterimRef = useRef(null);
 
-  const startListening = useCallback((onResult, onError) => {
+  const finalizeAndSend = useCallback(() => {
+    if (silenceTimerRef.current) {
+      clearTimeout(silenceTimerRef.current);
+      silenceTimerRef.current = null;
+    }
+    const text = accumulatedTranscriptRef.current?.trim();
+    accumulatedTranscriptRef.current = "";
+    setIsListening(false);
+    try {
+      recognitionRef.current?.stop();
+    } catch (_) {}
+
+    if (!isManuallyStoppedRef.current && text) {
+      onResultRef.current?.(text);
+    }
+  }, []);
+
+  const startListening = useCallback((onResult, onError, onInterim) => {
     const SpeechRecognition =
-      window.SpeechRecognition || window.webkitSpeechRecognition;
+      window.SpeechRecognition ||
+      window.webkitSpeechRecognition ||
+      window.mozSpeechRecognition ||
+      window.msSpeechRecognition;
+
     if (!SpeechRecognition) {
-      onError?.("Speech recognition not supported in this browser.");
+      onError?.(
+        window.isSecureContext === false
+          ? "Speech recognition requires HTTPS or localhost."
+          : "Speech recognition is not supported in this browser."
+      );
       return;
     }
 
@@ -113,62 +142,114 @@ export function useVoice() {
     window.speechSynthesis?.cancel();
     setIsSpeaking(false);
 
-    // Reset accumulated transcript
+    // Cancel any existing timer & reset state
+    if (silenceTimerRef.current) {
+      clearTimeout(silenceTimerRef.current);
+      silenceTimerRef.current = null;
+    }
     accumulatedTranscriptRef.current = "";
+    isManuallyStoppedRef.current = false;
+    onResultRef.current = onResult;
+    onErrorRef.current = onError;
+    onInterimRef.current = onInterim;
 
-    const recognition = new SpeechRecognition();
-    // continuous + interimResults lets us keep listening across natural pauses
-    recognition.continuous = true;
-    recognition.interimResults = true;
-    recognition.lang = "en-US";
+    try {
+      const recognition = new SpeechRecognition();
+      const isMobile =
+        typeof navigator !== "undefined" &&
+        /iPhone|iPad|iPod|Android|webOS|BlackBerry|IEMobile|Opera Mini/i.test(
+          navigator.userAgent
+        );
 
-    recognition.onstart = () => setIsListening(true);
+      // Mobile browsers (especially iOS Safari & Chrome Android) require continuous=false
+      // for stable speech capture without aborting or dropping events.
+      recognition.continuous = !isMobile;
+      recognition.interimResults = true;
+      recognition.lang = "en-US";
+      recognition.maxAlternatives = 1;
 
-    recognition.onresult = (e) => {
-      // Build the full transcript from all final results so far
-      let finalText = "";
-      let hasNewFinal = false;
-      for (let i = 0; i < e.results.length; i++) {
-        if (e.results[i].isFinal) {
-          finalText += e.results[i][0].transcript + " ";
-          hasNewFinal = true;
+      recognition.onstart = () => {
+        setIsListening(true);
+      };
+
+      recognition.onresult = (e) => {
+        let combined = "";
+        for (let i = 0; i < e.results.length; i++) {
+          const item = e.results[i];
+          if (item && item[0]) {
+            combined += item[0].transcript + " ";
+          }
         }
-      }
+        const text = combined.trim();
+        if (text) {
+          accumulatedTranscriptRef.current = text;
+          onInterimRef.current?.(text);
+        }
 
-      if (hasNewFinal) {
-        accumulatedTranscriptRef.current = finalText.trim();
-      }
+        // Reset the 3-second countdown every time new speech is detected
+        if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+        silenceTimerRef.current = setTimeout(() => {
+          finalizeAndSend();
+        }, 3000);
+      };
 
-      // Reset the 3-second silence timer every time speech is detected
-      if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
-      silenceTimerRef.current = setTimeout(() => {
-        const transcript = accumulatedTranscriptRef.current;
-        recognition.stop();
+      recognition.onerror = (e) => {
+        console.warn("Speech recognition error:", e.error);
+        // "no-speech" happens frequently if user pauses before speaking — don't abort if text already recorded
+        if (e.error === "no-speech") {
+          return;
+        }
+        if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+        silenceTimerRef.current = null;
         setIsListening(false);
-        if (transcript) onResult(transcript);
-      }, 3000);
-    };
+        onErrorRef.current?.(e.error);
+      };
 
-    recognition.onerror = (e) => {
-      if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+      recognition.onend = () => {
+        // If stopped manually by user clicking the mic button
+        if (isManuallyStoppedRef.current) {
+          if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+          silenceTimerRef.current = null;
+          accumulatedTranscriptRef.current = "";
+          setIsListening(false);
+          return;
+        }
+
+        // On mobile, the recognizer often finishes on pause before the 3s timer expires.
+        // DO NOT cancel the silence timer! It will fire when 3s finishes and send the input.
+        if (silenceTimerRef.current) {
+          return;
+        }
+
+        // If recognizer ended and we have a transcript but timer wasn't running, start 3s timer
+        if (accumulatedTranscriptRef.current?.trim()) {
+          silenceTimerRef.current = setTimeout(() => {
+            finalizeAndSend();
+          }, 3000);
+          return;
+        }
+
+        setIsListening(false);
+      };
+
+      recognitionRef.current = recognition;
+      recognition.start();
+    } catch (err) {
       setIsListening(false);
-      // Ignore "no-speech" — user just didn't say anything
-      if (e.error !== "no-speech") onError?.(e.error);
-    };
-
-    recognition.onend = () => {
-      // onend fires when stop() is called — clean up
-      if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
-      setIsListening(false);
-    };
-
-    recognitionRef.current = recognition;
-    recognition.start();
-  }, []);
+      onError?.(err?.message || "Failed to start microphone.");
+    }
+  }, [finalizeAndSend]);
 
   const stopListening = useCallback(() => {
-    if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
-    recognitionRef.current?.stop();
+    isManuallyStoppedRef.current = true;
+    if (silenceTimerRef.current) {
+      clearTimeout(silenceTimerRef.current);
+      silenceTimerRef.current = null;
+    }
+    accumulatedTranscriptRef.current = "";
+    try {
+      recognitionRef.current?.stop();
+    } catch (_) {}
     setIsListening(false);
   }, []);
 

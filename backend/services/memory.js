@@ -1,17 +1,54 @@
 const { GoogleGenerativeAI } = require("@google/generative-ai");
+const Groq = require("groq-sdk");
 const Memory = require("../models/Memory");
 const Mood = require("../models/Mood");
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+const genAI = process.env.GEMINI_API_KEY
+  ? new GoogleGenerativeAI(process.env.GEMINI_API_KEY)
+  : null;
+const groq = process.env.GROQ_API_KEY
+  ? new Groq({ apiKey: process.env.GROQ_API_KEY })
+  : null;
 const MAX_MEMORIES_PER_USER = 150;
 
 // ─── Combined: Extract memories + Detect mood in ONE API call ───────────────
 async function extractMemoriesAndMood(userMessage, aiReply, userId, chatId) {
   try {
-    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+    let parsed = null;
 
-    const result = await model.generateContent(
-      `You are an analysis engine. Do TWO things from this conversation exchange:
+    // 1. Try Groq (fast, reliable, no tight 20 req/day quota)
+    if (groq) {
+      try {
+        const completion = await groq.chat.completions.create({
+          model: process.env.GROQ_MODEL || "llama-3.3-70b-versatile",
+          messages: [
+            {
+              role: "system",
+              content: "You are an analysis engine. Return ONLY valid JSON with keys 'memories' (array) and 'mood' (object).",
+            },
+            {
+              role: "user",
+              content: `User said: "${userMessage}"\nAI replied: "${aiReply}"\n\nReturn JSON in format:\n{\n  "memories": [\n    {\n      "category": "personal|goals|preferences|people|events|opinions|facts",\n      "content": "concise fact (max 1 sentence)",\n      "importance": "low|medium|high",\n      "tags": ["relevant", "tags"]\n    }\n  ],\n  "mood": {\n    "mood": "happy|excited|neutral|stressed|sad|angry|curious",\n    "confidence": 0.8\n  }\n}`,
+            },
+          ],
+          response_format: { type: "json_object" },
+          temperature: 0.2,
+        });
+        const content = completion.choices[0]?.message?.content?.trim();
+        if (content) {
+          parsed = JSON.parse(content);
+        }
+      } catch (groqErr) {
+        console.warn("Groq memory extraction error, falling back to Gemini:", groqErr.message);
+      }
+    }
+
+    // 2. Try Gemini fallback
+    if (!parsed && genAI) {
+      try {
+        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+        const result = await model.generateContent(
+          `You are an analysis engine. Do TWO things from this conversation exchange:
 
 1. Extract any facts about the user worth remembering long-term.
 2. Detect the user's current mood/emotional state.
@@ -33,24 +70,19 @@ Return ONLY valid JSON (no markdown, no explanation):
     "mood": "happy|excited|neutral|stressed|sad|angry|curious",
     "confidence": 0.8
   }
-}
+}`
+        );
+        const rawText = result.response.text().trim();
+        const cleaned = rawText.replace(/```json|```/g, "").trim();
+        parsed = JSON.parse(cleaned);
+      } catch (geminiErr) {
+        console.warn("Gemini memory extraction error:", geminiErr.message);
+      }
+    }
 
-MEMORY RULES:
-- Only extract CONCRETE, SPECIFIC facts. Not vague statements.
-- "My exam is on Friday" → extract. "I'm fine" → skip.
-- "I love basketball" → extract. "yeah sure" → skip.
-- Return empty array [] for memories if nothing worth remembering.
-- Do NOT extract facts about the AI, only about the USER.
-
-MOOD RULES:
-- Detect from the USER's message tone and content.
-- "I got the job!" → excited. "I'm so tired" → stressed. "hey" → neutral.
-- confidence is 0.0 to 1.0 — how sure you are about the mood.`
-    );
-
-    const rawText = result.response.text().trim();
-    const cleaned = rawText.replace(/```json|```/g, "").trim();
-    const parsed = JSON.parse(cleaned);
+    if (!parsed) {
+      return { memories: [], mood: null };
+    }
 
     // Handle memories
     const memories = parsed.memories || [];
